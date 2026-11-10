@@ -87,7 +87,7 @@ try {
             throw 'A release asset differs from its update manifest.'
         }
     }
-    $taskPortable = & (Join-Path $PSScriptRoot 'test-portable-package.ps1') -PackagePath (Join-Path $taskDirectory "BatteryManager-$taskVersion-win-x64.zip")
+    $taskPortable = & (Join-Path $PSScriptRoot 'test-portable-package.ps1') -PackagePath (Join-Path $taskDirectory "BatteryManager-$taskVersion-win-x64.zip") -TargetCommit $taskCommit
     if (-not $taskPortable.passed -or $taskPortable.version -cne $taskVersion -or $taskPortable.sourceFingerprint -cne $taskDelivery.sourceFingerprint) {
         throw 'Portable payload and delivery provenance differ.'
     }
@@ -96,9 +96,11 @@ try {
     $taskInstaller = @($taskManifest.assets | Where-Object kind -CEQ 'installer')[0]
     if ($taskBuild.testOnly -isnot [bool] -or $taskBuild.testOnly -or $taskBuild.version -cne $taskVersion -or
         $taskBuild.installerSha256 -cne $taskInstaller.sha256 -or $taskBuild.portableSha256 -cne $taskPortable.archiveSha256 -or
-        $taskBuild.payloadSourceFingerprint -cne $taskDelivery.sourceFingerprint) {
+        $taskBuild.payloadSourceFingerprint -cne $taskDelivery.sourceFingerprint -or
+        $null -eq $taskBuild.PSObject.Properties['installerScriptSha256'] -or $null -eq $taskBuild.PSObject.Properties['installedMarkerSha256']) {
         throw 'Installer build record does not match this production delivery.'
     }
+    Assert-PortableInstallerSourceHashes $taskPortable.installerScriptSha256 $taskPortable.installedMarkerSha256 $taskBuild.installerScriptSha256 $taskBuild.installedMarkerSha256
     $taskAssets = foreach ($name in $taskNames) {
         $path = Join-Path $taskDirectory $name
         $length = [long](Get-Item -LiteralPath $path).Length
@@ -114,7 +116,9 @@ try {
     $taskPlan = [ordered]@{
         schemaVersion=1;repository=$taskRepository;version=$taskVersion;tag=$taskDelivery.tag;targetCommit=$taskCommit
         draft=$true;prerelease=$taskDelivery.prerelease;assets=@($taskAssets);createArguments=$taskCreate
-        sourceFingerprint=$taskDelivery.sourceFingerprint;sourceCommitBindingVerified=$false
+        sourceFingerprint=$taskDelivery.sourceFingerprint;sourceCommitBindingVerified=$taskPortable.sourceCommitBindingVerified
+        sourceGitFingerprint=$taskPortable.sourceGitFingerprint;sourceBindingRule=$taskPortable.sourceBindingRule
+        sourceBindingLimits='Source content proof only; supported differences are committed blob bytes or UTF-8 LF-to-CRLF conversion allowed by Git text/eol/autocrlf. Custom filters, ident and encoding transformations are rejected. This is not a reproducible-binary attestation.'
         planOnly=[bool]$PlanOnly;networkAccessed=$false;created=$false;published=$false
     }
     if ($PlanOnly) { [pscustomobject]$taskPlan; return }

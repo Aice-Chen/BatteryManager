@@ -22,6 +22,7 @@
 ./scripts/verify.ps1
 ./scripts/test-release-tooling.ps1
 ./.tools/dotnet/dotnet.exe build src/BatteryManager.App/BatteryManager.App.csproj -c Release
+./scripts/ci-verify.ps1 -Stage All -DotnetPath ./.tools/dotnet/dotnet.exe
 ```
 
 `verify.ps1` 顺序运行 Core、Application、WindowsNative、App.Logic、Session、Cli 测试。发布工具检查使用本地假数据，不下载、执行或安装软件。
@@ -33,11 +34,13 @@
 | 位置 | 内容 |
 |---|---|
 | `.artifacts/test-results` | 代码测试结果 |
+| `.artifacts/ci/<阶段>/<运行>` | 本机或 GitHub CI 的测试、构建日志与摘要 |
 | `.artifacts/tests/<主题>` | 定向检查与小型测试样本 |
 | `.artifacts/packages` | 干净构建的便携包及其构建目录 |
 | `.artifacts/installers` | 安装器构建及编译日志 |
 | `.artifacts/releases` | 已组装的版本交付目录 |
 | `.artifacts/evidence/<版本或阶段>` | 验收摘要与证据入口 |
+| `.artifacts/installed/BatteryManager` | 本机已登记的安装版目录；运行目录，不随测试输出清理 |
 | `.artifacts/hardware` | 原始硬件证据 |
 | `.artifacts/archive` | 已归档历史证据 |
 | `docs/releases/<版本>` | 发布说明与变更记录 |
@@ -64,13 +67,25 @@
 
 1. 修改 `version.props`，在 `docs/releases/<版本>` 写使用者能看到的变更和已知限制。
 2. 运行代码与受影响的应用场景。安装/更新改动额外运行隔离生命周期及进程交接测试。
-3. 使用 `package-preview.ps1` 或正式入口 `package-release.ps1` 构建便携 ZIP；修改任何源输入后重新构建。
+3. 提交已审核的源代码与版本号，在干净工作树使用 `package-preview.ps1` 或正式入口 `package-release.ps1` 构建便携 ZIP；修改任何源输入后重新构建。打包前后必须保持同一提交和输入文件。
 4. 把该 ZIP 交给 `package-installer.ps1 -PortablePackagePath <路径>`，确保安装器与便携包来自同一负载。
 5. 使用 `prepare-release.ps1` 生成独立交付目录；预览必须带 `-Prerelease`。本地的 `installer-build.json`、`delivery.json` 含构建路径，不作为公开附件。
 6. 先运行 `publish-github-release.ps1 -DeliveryDirectory <目录> -TargetCommit <40位提交> -PlanOnly` 审核六个公开附件及目标提交。去掉 `-PlanOnly` 才调用 GitHub CLI，且只创建草稿，拒绝覆盖已有标签或发布。正式发布标签使用 `v<版本>`；正式更新客户端忽略预览与草稿。发布后保留该版本的 ZIP、安装器、摘要、manifest 和验证入口。
 
-发布脚本核实目标提交存在、包与来源指纹一致，并回读草稿附件名称和长度；当前不会将包内每个源码摘要与该 Git 提交逐一比对。应从已审核的干净工作树构建，并人工核对目标提交。`test-github-release-tooling.ps1` 使用本地 CLI 替身验证失败、覆盖保护和白名单，不访问 GitHub。
+新包同时记录实际构建字节的 `source-files.sha256` 和 Git 规范字节的 `source-git-files.sha256`。发布校验逐项比较文件集合、摘要与指定的完整提交，只容许明确限定的文本换行转换；额外、缺失或不同内容的源码不能通过。旧包仍可做完整性检查，但缺少提交绑定信息的旧包不能走新的发布入口。`test-github-release-tooling.ps1` 使用本地 CLI 替身验证失败、覆盖保护和白名单，不访问 GitHub。
 
 应用管理交互测试入口为 `test-app-management.ps1 -PreviewExe <项目内隔离程序>`，替换网络、注册表、硬件及安装动作，仍运行正式协调和控件。`test-installer-lifecycle.ps1` 与 `test-installer-handoff.ps1` 先生成计划，复核后对该计划传 `-Execute -PreparedDirectory <目录>`；独立 AppId/互斥体、禁用系统注册和程序启动，使用假负载或最小进程组件。测试版安装器不能进入发布链。
 
-隔离测试不代表日常配置迁移、真实 Windows 登录或线上新旧正式版升级已验收。GitHub Actions 当前尚未启用；本地脚本是现行验证入口。
+`.github/workflows/verify.yml` 在 Windows runner 上运行六个代码测试项目、离线发布工具检查和 Release 构建。工作流只读仓库，仅上传测试日志及结果；不运行硬件、安装器或发布操作。本机可运行相同的 `ci-verify.ps1`。远端运行是否通过，以对应提交的 Actions 结果为准。
+
+## 真实安装升级验收
+
+真实验收共用当前用户的安装登记和配置；即使安装目录在项目内，也必须先备份现有配置、Run/StartupApproved 状态、卸载登记及开始菜单快捷方式。以用户实际使用的便携目录为迁移来源，不能从开发预览目录猜测最新配置。所有结果集中保存到本轮 `.artifacts/evidence/<阶段>`。
+
+普通安装版带 `--test-pipe <唯一后缀>` 启动后，可通过 `app-test-client.ps1` 打开设置，并调用 `ui / management-import-directory / value=<便携目录>`。该入口沿用正式导入、无覆盖与保存屏障；它使用真实存储，不能当作演示模式使用。
+
+端到端更新验收可额外指定 `--update-fixture <绝对 JSON 路径>`。该模式仅替换 HTTP 响应：文件内 URL 与请求精确匹配，未匹配直接失败，不回退网络。真实版本比较、manifest、长度与 SHA256 校验、下载、保存排空、原生 I/O 排空及 Inno 进程交接继续执行。界面和日志明确标记本地验收；不能与 `--scenario` 合用。安装时仅该模式附加固定静默参数，安装日志留在 fixture 目录。
+
+fixture 的 `schemaVersion` 为 1，`purpose` 为 `local-update-acceptance`；`responses` 每项明确填写 `url`、`statusCode`、`bodyFile`、`location`、`delayMilliseconds`。`bodyFile` 只能引用同目录内的相对文件；没有内容或跳转时对应字段为 null。GitHub release JSON、更新 manifest 与安装包必须使用同一个真实版本，不得将旧程序改名充当新版。候选可以只在本地存在，不应为了验收发布虚构线上版本。
+
+按“旧版启动及导入 → 发现新版 → 下载校验 → App 排空退出 → 安装器等待旧进程结束 → 新版启动与配置核对 → 回退旧版并核对 → 恢复候选”的顺序验收。真实登录自启需另由用户注销并登录；本地 HTTP fixture 验收不能代替 GitHub 实际发布与下载验证。
