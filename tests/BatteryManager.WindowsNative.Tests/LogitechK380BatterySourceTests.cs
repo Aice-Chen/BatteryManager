@@ -23,6 +23,7 @@ public sealed class LogitechK380BatterySourceTests
         Assert.Equal("Completed", (await session.RefreshAsync()).Outcome);
         var device = Assert.Single(session.Snapshot.State.Devices);
         Assert.Equal(DeviceKind.Keyboard, device.Kind);
+        Assert.Equal(DeviceTransport.Bluetooth, DeviceDisplayMapper.Map(device)!.Transport);
         Assert.Equal(ConnectionState.Online, device.Connection);
         Assert.Equal(90, device.BatteryPercent);
         Assert.Equal(BatteryFreshness.Current, device.Freshness);

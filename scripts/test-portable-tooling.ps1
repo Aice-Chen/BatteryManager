@@ -42,6 +42,9 @@ function Write-Fixture([string]$Case) {
     if ($Case -eq 'personal-v1-backup') { $files.Add('settings.v1.bak', '{"version":1,"priorityDevices":[]}') }
     if ($Case -eq 'personal-v2-backup') { $files.Add('settings.v2.bak', '{"version":2,"priorityDevices":[]}') }
     if ($Case -eq 'personal-log') { $files.Add('logs/diagnostic-example.jsonl', '{"device":"private"}') }
+    if ($Case -eq 'personal-management') { $files.Add('management.json', '{"version":1}') }
+    if ($Case -eq 'personal-update-cache') { $files.Add('updates/old-setup.exe', 'Inert cached installer') }
+    if ($Case -eq 'installed-marker') { $files.Add('installed.json', '{"schemaVersion":1,"product":"BatteryManager","scope":"currentUser"}') }
     $lines = foreach ($file in $files.GetEnumerator()) { (Get-PortableTextHash $file.Value) + '  ' + $file.Key }
     $files.Add('SHA256SUMS.txt', ($lines -join "`n") + "`n")
     if ($Case -eq 'corrupt-content') { $files['BatteryManager.App.dll'] = 'changed after hashing' }
@@ -64,7 +67,7 @@ function Write-Fixture([string]$Case) {
     return $path
 }
 
-foreach ($case in @('valid', 'stable-valid', 'version-trailing-hyphen', 'version-leading-zero', 'version-directory-mismatch', 'version-information-mismatch', 'font-valid', 'font-missing-license', 'font-wrong-license', 'font-loose-ttf', 'corrupt-content', 'missing-file', 'unlisted-file', 'personal-settings', 'personal-v1-backup', 'personal-v2-backup', 'personal-log', 'traversal', 'duplicate-path', 'symlink', 'wrong-source', 'external-runtime', 'bad-sidecar')) {
+foreach ($case in @('valid', 'stable-valid', 'version-trailing-hyphen', 'version-leading-zero', 'version-directory-mismatch', 'version-information-mismatch', 'font-valid', 'font-missing-license', 'font-wrong-license', 'font-loose-ttf', 'corrupt-content', 'missing-file', 'unlisted-file', 'personal-settings', 'personal-v1-backup', 'personal-v2-backup', 'personal-log', 'personal-management', 'personal-update-cache', 'installed-marker', 'traversal', 'duplicate-path', 'symlink', 'wrong-source', 'external-runtime', 'bad-sidecar')) {
     $path = Write-Fixture $case
     $accepted = $false; $failure = $null
     try { $result = & (Join-Path $PSScriptRoot 'test-portable-package.ps1') -PackagePath $path; $accepted = $result.passed }

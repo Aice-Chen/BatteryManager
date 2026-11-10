@@ -1,0 +1,71 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows code and tooling
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      NUGET_XMLDOC_MODE: skip
+    steps:
+      - name: Check out source
+        # https://github.com/actions/checkout (v6)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Install the repository SDK
+        id: sdk
+        # https://github.com/actions/setup-dotnet (v5)
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+          architecture: x64
+
+      - name: Run six code test projects
+        run: ./scripts/ci-verify.ps1 -Stage CodeTests
+
+      - name: Check offline packaging and publication tools
+        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        run: ./scripts/ci-verify.ps1 -Stage Tooling
+
+      - name: Build the Release application
+        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        run: ./scripts/ci-verify.ps1 -Stage Build
+
+      - name: Upload verification evidence
+        if: ${{ always() }}
+        # https://github.com/actions/upload-artifact (v4)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verification-${{ github.run_id }}-${{ github.run_attempt }}
+          # Only diagnostics from this clean runner; no binaries or user data.
+          path: |
+            .artifacts/ci/**/*.log
+            .artifacts/ci/**/*.trx
+            .artifacts/ci/**/summary.json
+            .artifacts/tests/portable-tooling-*/result.json
+            .artifacts/tests/release-tooling/*/result.json
+            .artifacts/tests/source-binding/*/result.json
+            .artifacts/tests/github-release-tooling/*/result.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

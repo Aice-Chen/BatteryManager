@@ -35,6 +35,7 @@ public sealed class NativeStateIntegrationTests
         Assert.Equal(ConnectionState.Online, online.Connection);
         Assert.Equal(73, online.BatteryPercent);
         Assert.Equal(BatteryFreshness.Recent, online.Freshness);
+        Assert.Equal(DeviceTransport.Bluetooth, DeviceDisplayMapper.Map(online)!.Transport);
         var expiry = Assert.Single(online.Readings).ExpiresAt;
 
         clock.Advance(TimeSpan.FromSeconds(30));

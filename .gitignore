@@ -16,6 +16,8 @@
 /docs/ui-handoff/
 **/settings.json
 **/settings.v*.bak
+**/management.json
+**/management.json.*
 **/logs/
 .env
 .env.*

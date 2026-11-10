@@ -1,9 +1,9 @@
 using System.Text.Json;
-using BatteryManager.App;
+using BatteryManager.Application;
 using BatteryManager.Core;
 using Xunit;
 
-namespace BatteryManager.WindowsNative.Tests;
+namespace BatteryManager.Application.Tests;
 
 public sealed class DeviceLinkPreferencesTests
 {

@@ -56,6 +56,7 @@ public sealed class ReaderClockTests
         var batches = new ConcurrentBag<SourceBatch>();
         await new GattBatterySource(io, clock).ReadAsync(new(1, true), batches.Add, CancellationToken.None);
         var observation = Assert.Single(Assert.Single(batches, batch => batch.Complete).Observations);
+        Assert.Equal(DeviceTransport.Bluetooth, observation.Transport);
         Assert.Equal(Start, observation.Battery!.ObservedAt);
         Assert.Equal(Start, observation.Battery.ReadAt);
         Assert.Equal(TimeSpan.Zero, observation.Battery.ReadElapsed);
@@ -75,6 +76,7 @@ public sealed class ReaderClockTests
         var batches = new ConcurrentBag<SourceBatch>();
         await new AtkBatterySource(io, clock).ReadAsync(new(1, true), batches.Add, CancellationToken.None);
         var observation = Assert.Single(Assert.Single(batches, batch => batch.Complete).Observations);
+        Assert.Equal(DeviceTransport.Receiver, observation.Transport);
         Assert.True(channel.Disposed);
         Assert.Equal(80, observation.Battery!.Percent);
         Assert.Equal(Start, observation.ReceivedAt);

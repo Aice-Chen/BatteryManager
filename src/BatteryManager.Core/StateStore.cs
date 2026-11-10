@@ -224,6 +224,8 @@ public sealed class StateStore
 
         var validTime = receivedElapsed <= now;
         if (validTime) source.LastReceivedElapsed = receivedElapsed;
+        if (validTime && observation.Transport is DeviceTransport.Bluetooth or DeviceTransport.Receiver or DeviceTransport.Wired)
+            source.Transport = observation.Transport;
         source.Attempt = observation.Status;
         source.Error = observation.Error;
         source.AttemptedAt = observation.ReceivedAt;
@@ -400,7 +402,7 @@ public sealed class StateStore
                     attempts.Add(new(endpointId, pair.Key, status, fieldFailure?.Error ?? source.Error,
                         source.AttemptGeneration == _generation,
                         source.Fields.Values.Any(field => (field.Latest?.Sample.Precision ?? field.Qualified?.Sample.Precision)?.StartsWith("coarse:", StringComparison.Ordinal) == true),
-                        endpointConnection));
+                        endpointConnection, source.Transport));
                     if (source.Error is not null && source.AttemptedElapsed >= latestErrorAt)
                     {
                         latestError = source.Error;
@@ -437,18 +439,17 @@ public sealed class StateStore
                     }
                 }
             }
-            var selected = candidates.Where(x => x.Reading.Component == "device" && x.Reading.Percent is >= 0 and <= 100 &&
-                    x.Reading.Freshness is BatteryFreshness.Current or BatteryFreshness.Recent or BatteryFreshness.Retained)
-                .OrderByDescending(x => linked ? x.Reading.Freshness is BatteryFreshness.Current or BatteryFreshness.Recent ? 1 : 0 : 0)
-                .ThenByDescending(x => linked ? x.ReadElapsed : TimeSpan.Zero)
-                .ThenByDescending(x => FreshnessRank(x.Reading.Freshness))
-                .ThenByDescending(x => EvidenceRank(x.Reading.Evidence))
-                .ThenByDescending(x => x.Reading.Precision == "percent")
-                .ThenByDescending(x => x.ObservedElapsed)
-                .ThenByDescending(x => x.ReadElapsed)
-                .ThenBy(x => x.Reading.Source, StringComparer.Ordinal)
-                .ThenBy(x => x.Reading.EndpointId, StringComparer.Ordinal)
-                .FirstOrDefault()?.Reading;
+            IEnumerable<RankedReading> selectable = candidates.Where(x => x.Reading.Component == "device" && x.Reading.Percent is >= 0 and <= 100 &&
+                x.Reading.Freshness is BatteryFreshness.Current or BatteryFreshness.Recent or BatteryFreshness.Retained);
+            if (linked)
+            {
+                // Source quality is a decision within one raw device, including
+                // its automatically merged endpoints. Linking must not make a
+                // newer Windows cache displace that device's usable active read.
+                selectable = selectable.GroupBy(x => _aliases["endpoint:" + x.Reading.EndpointId], StringComparer.Ordinal)
+                    .Select(member => OrderReadings(member, acrossMembers: false).First());
+            }
+            var selected = OrderReadings(selectable, acrossMembers: linked).FirstOrDefault()?.Reading;
             var freshnessState = selected?.Freshness ??
                 (readings.Any(x => x.Freshness == BatteryFreshness.Expired) ? BatteryFreshness.Expired : BatteryFreshness.Unknown);
             // Windows history and receiver paths do not confirm an active device.
@@ -469,6 +470,19 @@ public sealed class StateStore
                 IsExplicitlyOffline = !linked && !_open && entity.Endpoints.All(id => IsConfirmedOffline(_endpoints[id], now))
             };
     }
+
+    private static IOrderedEnumerable<RankedReading> OrderReadings(IEnumerable<RankedReading> readings, bool acrossMembers) =>
+        readings.OrderByDescending(x => acrossMembers ? x.Reading.Freshness is BatteryFreshness.Current or BatteryFreshness.Recent ? 1 : 0 : 0)
+            // Only the chosen representative's own read time participates here;
+            // an unselected cache must not give the representative a newer time.
+            .ThenByDescending(x => acrossMembers ? x.ReadElapsed : TimeSpan.Zero)
+            .ThenByDescending(x => FreshnessRank(x.Reading.Freshness))
+            .ThenByDescending(x => EvidenceRank(x.Reading.Evidence))
+            .ThenByDescending(x => x.Reading.Precision == "percent")
+            .ThenByDescending(x => x.ObservedElapsed)
+            .ThenByDescending(x => x.ReadElapsed)
+            .ThenBy(x => x.Reading.Source, StringComparer.Ordinal)
+            .ThenBy(x => x.Reading.EndpointId, StringComparer.Ordinal);
 
     private void SyncLinkedEntities(TimeSpan now)
     {
@@ -812,7 +826,7 @@ public sealed class StateStore
                 Add(attempt.EndpointId); Add(attempt.Source); Add(attempt.Status); Add(attempt.Error);
                 // The latest source result remains displayed until that source
                 // reports again; a new scan alone must not flicker its warning.
-                Add(attempt.Coarse); Add(attempt.Connection);
+                Add(attempt.Coarse); Add(attempt.Connection); Add(attempt.Transport);
             }
         }
         return text.ToString();
@@ -850,6 +864,7 @@ public sealed class StateStore
 
     private sealed class Source
     {
+        public DeviceTransport Transport { get; set; }
         public TimeSpan LastReceivedElapsed { get; set; } = TimeSpan.MinValue;
         public TimeSpan? PositiveAt { get; set; }
         public TimeSpan? PositiveUntil { get; set; }

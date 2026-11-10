@@ -167,7 +167,8 @@ public sealed class WindowsNativeSource : IDeviceSource
         var at = ClockInstant.Read(clock);
         return new(WindowsDeviceMapping.Endpoint(raw, kind), WindowsDeviceMapping.NormalizeContainer(container),
             WindowsDeviceMapping.Address(raw), WindowsDeviceMapping.Text(raw.Properties, "System.ItemNameDisplay") ?? raw.Name,
-            WindowsDeviceMapping.Kind(raw), source, at.Utc, connected, present, battery, status, error, at.Elapsed);
+            WindowsDeviceMapping.Kind(raw), source, at.Utc, connected, present, battery, status, error, at.Elapsed,
+            Transport: WindowsDeviceMapping.IsRelevant(raw, kind) ? DeviceTransport.Bluetooth : DeviceTransport.Unknown);
     }
 
     public static string SourceName(WindowsQueryKind kind) => kind switch

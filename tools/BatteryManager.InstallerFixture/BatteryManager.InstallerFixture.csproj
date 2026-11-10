@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>BatteryManager.App</AssemblyName>
+    <AssemblyTitle>Battery Manager installer test fixture</AssemblyTitle>
+    <Description>Isolated installer handoff fixture. No device access, settings, or UI.</Description>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseAppHost>true</UseAppHost>
+  </PropertyGroup>
+</Project>

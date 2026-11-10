@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" PrivateAssets="all" />
+    <ProjectReference Include="../../src/BatteryManager.Application/BatteryManager.Application.csproj" />
+    <ProjectReference Include="../../src/BatteryManager.WindowsNative/BatteryManager.WindowsNative.csproj" />
+    <!-- Test UI-independent app adapters without starting WinUI or opening real hardware. -->
+    <Compile Include="../../src/BatteryManager.App/AppDiagnosticLog.cs" Link="AppDiagnosticLog.cs" />
+    <Compile Include="../../src/BatteryManager.App/AppScenarios.cs" Link="AppScenarios.cs" />
+    <Compile Include="../../src/BatteryManager.App/TrayPanelPlacement.cs" Link="TrayPanelPlacement.cs" />
+    <Compile Include="../../src/BatteryManager.App/Platform/WindowsStartupRegistry.cs" Link="Platform/WindowsStartupRegistry.cs" />
+    <Compile Include="../../src/BatteryManager.App/LocalUpdateFixture.cs" Link="LocalUpdateFixture.cs" />
+  </ItemGroup>
+</Project>

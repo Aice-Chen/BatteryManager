@@ -50,7 +50,7 @@ internal static class UiText
         ["Left"] = ("左耳", "Left"), ["Right"] = ("右耳", "Right"), ["Case"] = ("充电盒", "Case"),
         ["Edit"] = ("编辑", "Edit"), ["EditTrayIcon"] = ("编辑托盘图标", "Edit tray icon"),
         ["TrayIconHint"] = ("选择托盘数字优先显示哪台设备", "Choose which device the tray number shows first"),
-        ["AboutHint"] = ("本地读取外设电量，不上传任何数据", "Reads accessory batteries locally. Nothing is uploaded."),
+        ["AboutHint"] = ("本地读取外设电量，不上传设备数据", "Reads accessory batteries locally. Device data is not uploaded."),
         ["BatterySource"] = ("电量来源", "Battery source"), ["OpenMain"] = ("打开主窗口", "Open main window"),
         ["Up"] = ("上移", "Move up"), ["Down"] = ("下移", "Move down"), ["Remove"] = ("移除", "Remove"),
         ["SaveFailed"] = ("保存未完成，请稍后重试。", "Saving did not complete. Please try again."),
@@ -99,7 +99,7 @@ internal static class UiText
     { DeviceTransport.Bluetooth => "\uE702", DeviceTransport.Receiver => "\uE957", DeviceTransport.Wired => "\uE88E", _ => "\uE772" };
     public static SolidColorBrush Brush(byte red, byte green, byte blue) => new(Color.FromArgb(255, red, green, blue));
     private static bool Dark(FrameworkElement? element) => element?.ActualTheme == ElementTheme.Dark ||
-        (element is null && Application.Current.RequestedTheme == ApplicationTheme.Dark);
+        (element is null && Microsoft.UI.Xaml.Application.Current.RequestedTheme == ApplicationTheme.Dark);
     public static SolidColorBrush InkFor(FrameworkElement? element) => Dark(element) ? Brush(255, 255, 255) : Brush(27, 27, 27);
     public static SolidColorBrush MutedFor(FrameworkElement? element) => Dark(element) ? Brush(173, 173, 173) : Brush(100, 100, 100);
     public static SolidColorBrush BackgroundFor(FrameworkElement? element) => Dark(element) ? Brush(32, 32, 32) : Brush(243, 243, 243);

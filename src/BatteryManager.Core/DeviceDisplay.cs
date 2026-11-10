@@ -4,7 +4,6 @@ namespace BatteryManager.Core;
 
 public enum DisplayPresence { Online, NoResponse }
 public enum BatteryTone { Normal, Stale, None }
-public enum DeviceTransport { Unknown, Bluetooth, Receiver, Wired, Mixed }
 public enum DisplayDeviceKind { Unknown, Headphones, Earbuds, Keyboard, Mouse, GameController, Speaker, Pen, Other }
 public enum MainColorMode { System, Light, Dark }
 public enum SourceDisplayResult { Success, NoData, Failed, Unsupported }
@@ -92,7 +91,7 @@ public static class DeviceDisplayMapper
             reading.Error, false, reading.Precision.StartsWith("coarse:", StringComparison.Ordinal), device.Connection)).ToArray();
 
     private static IReadOnlyList<ConnectionDisplay> Connections(IReadOnlyList<DeviceSourceAttempt> attempts) => Array.AsReadOnly(attempts
-        .Select(attempt => (Transport: EndpointTransport(attempt.EndpointId, attempt.Source), attempt.Connection))
+        .Select(attempt => (attempt.Transport, attempt.Connection))
         .Where(item => item.Transport is DeviceTransport.Bluetooth or DeviceTransport.Receiver or DeviceTransport.Wired)
         .GroupBy(item => item.Transport).OrderBy(group => group.Key)
         .Select(group => new ConnectionDisplay(group.Key, group.Max(item => item.Connection switch
@@ -121,29 +120,19 @@ public static class DeviceDisplayMapper
     public static IReadOnlyList<DeviceTransport> DetectedTransports(DeviceState device)
     {
         ArgumentNullException.ThrowIfNull(device);
-        return Array.AsReadOnly(device.SourceAttempts.Select(attempt => EndpointTransport(attempt.EndpointId, attempt.Source))
-            .Where(transport => transport != DeviceTransport.Unknown).Distinct().Order().ToArray());
+        return Array.AsReadOnly(device.SourceAttempts.Select(attempt => attempt.Transport)
+            .Where(IsSpecificTransport).Distinct().Order().ToArray());
     }
 
     private static DeviceTransport TransportOf(IEnumerable<DeviceSourceAttempt> attempts)
     {
-        var transports = attempts.Select(attempt => EndpointTransport(attempt.EndpointId, attempt.Source))
-            .Where(transport => transport != DeviceTransport.Unknown).Distinct().ToArray();
+        var transports = attempts.Select(attempt => attempt.Transport)
+            .Where(IsSpecificTransport).Distinct().ToArray();
         return transports.Length switch { 0 => DeviceTransport.Unknown, 1 => transports[0], _ => DeviceTransport.Mixed };
     }
 
-    private static DeviceTransport EndpointTransport(string endpoint, string source)
-    {
-        if (endpoint.StartsWith("bt-classic:", StringComparison.OrdinalIgnoreCase) ||
-            endpoint.StartsWith("bt-le:", StringComparison.OrdinalIgnoreCase)) return DeviceTransport.Bluetooth;
-        // Only the dedicated verified receiver adapters establish a wireless transport.
-        // A general HID/USB path says nothing about wired vs receiver communication.
-        if ((source == "hid.atk.compx" && endpoint.StartsWith("hid:atk:", StringComparison.OrdinalIgnoreCase)) ||
-            (source == "hid.lofree.compx" && endpoint.StartsWith("hid:lofree:", StringComparison.OrdinalIgnoreCase)) ||
-            (source == "hid.mchose.g3" && endpoint.StartsWith("hid:mchose:", StringComparison.OrdinalIgnoreCase)))
-            return DeviceTransport.Receiver;
-        return DeviceTransport.Unknown;
-    }
+    private static bool IsSpecificTransport(DeviceTransport transport) =>
+        transport is DeviceTransport.Bluetooth or DeviceTransport.Receiver or DeviceTransport.Wired;
 }
 
 /// <summary>Stable presentation order shared by the main window and the tray panel:

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$PackagePath,
-    [switch]$Extract
+    [switch]$Extract,
+    [ValidatePattern('\A[0-9a-fA-F]{40}\z')][string]$TargetCommit
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,6 +85,25 @@ try {
         $taskSourceHashes.Add($Matches[2],$Matches[1])
     }
     if ($taskSourcePaths.Count -ne $taskInfo.sourceFileCount) { throw 'The source manifest file count is incorrect.' }
+    $taskSourceCommit = $null; $taskGitFingerprint = $null; $taskBindingVerified = $false
+    $taskBindingFields = @('sourceCommit','sourceGitManifest','sourceGitFingerprint','sourceAutoCrlf','sourceBindingRule')
+    $taskPresentBindingFields = @($taskBindingFields | Where-Object { $null -ne $taskInfo.PSObject.Properties[$_] })
+    if ($taskPresentBindingFields.Count) {
+        if ($taskPresentBindingFields.Count -ne $taskBindingFields.Count -or $taskInfo.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
+            $taskInfo.sourceGitManifest -cne 'source-git-files.sha256' -or $taskInfo.sourceGitFingerprint -cnotmatch '\A[0-9a-f]{64}\z' -or
+            $taskInfo.sourceAutoCrlf -cnotin @('true','false','input') -or $taskInfo.sourceBindingRule -cne 'git-blob-with-utf8-eol-v1' -or
+            -not $taskFiles.ContainsKey('source-git-files.sha256')) { throw 'Invalid source commit binding metadata.' }
+        $taskGitManifest = Read-PackageText $taskFiles['source-git-files.sha256']
+        $taskGitHashes = Get-PortableSourceHashes $taskGitManifest
+        if ((Get-PortableTextHash $taskGitManifest) -cne $taskInfo.sourceGitFingerprint -or $taskGitHashes.Count -ne $taskSourcePaths.Count -or
+            @($taskSourcePaths | Where-Object { -not $taskGitHashes.ContainsKey($_) }).Count) { throw 'The raw and Git source manifests do not cover the same files.' }
+        $taskSourceCommit = $taskInfo.sourceCommit; $taskGitFingerprint = $taskInfo.sourceGitFingerprint
+        if ($TargetCommit) {
+            if ($taskSourceCommit -cne $TargetCommit.ToLowerInvariant()) { throw 'Package source commit differs from the requested release commit.' }
+            $null = Assert-PortableSourceBinding $taskRoot $taskSourceCommit $taskSourceManifest $taskGitManifest $taskInfo.sourceAutoCrlf
+            $taskBindingVerified = $true
+        }
+    } elseif ($TargetCommit) { throw 'Legacy packages remain verifiable, but publication requires source commit binding from a new clean build.' }
     if ($taskSourcePaths.Contains('src/BatteryManager.App/Assets/Fonts/BarlowSemiCondensed-Medium.ttf')) {
         if (-not $taskFiles.ContainsKey('licenses/Barlow-OFL.txt') -or
             -not $taskSourceHashes.ContainsKey('src/BatteryManager.App/Assets/Fonts/OFL.txt') -or
@@ -103,6 +123,10 @@ try {
     }
     [pscustomobject]@{
         passed = $true; version = $taskInfo.version; sourceFingerprint = $taskInfo.sourceFingerprint
+        sourceCommit = $taskSourceCommit; sourceGitFingerprint = $taskGitFingerprint; sourceCommitBindingVerified = $taskBindingVerified
+        sourceBindingRule = $(if ($taskPresentBindingFields.Count) { $taskInfo.sourceBindingRule } else { $null })
+        installerScriptSha256 = $(if ($taskSourceHashes.ContainsKey('packaging/windows/BatteryManager.iss')) { $taskSourceHashes['packaging/windows/BatteryManager.iss'] } else { $null })
+        installedMarkerSha256 = $(if ($taskSourceHashes.ContainsKey('packaging/windows/installed.json')) { $taskSourceHashes['packaging/windows/installed.json'] } else { $null })
         packagePath = $taskArchivePath; archiveSha256 = $taskArchiveHash; fileCount = $taskFiles.Count; expandedBytes = $taskTotalBytes
         extractedDirectory = $taskExtracted; previewExe = $(if ($taskExtracted) { Join-Path $taskExtracted 'BatteryManager.App.exe' } else { $null })
         appStarted = $false

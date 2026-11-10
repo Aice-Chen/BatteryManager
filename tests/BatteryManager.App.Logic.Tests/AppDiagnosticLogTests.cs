@@ -5,7 +5,7 @@ using BatteryManager.Core;
 using BatteryManager.WindowsNative;
 using Xunit;
 
-namespace BatteryManager.WindowsNative.Tests;
+namespace BatteryManager.App.Logic.Tests;
 
 public sealed class AppDiagnosticLogTests
 {
@@ -214,7 +214,7 @@ public sealed class AppDiagnosticLogTests
         using var log = new AppDiagnosticLog(new FakeIo(inner), output);
         if (failLog) output.Failure = "write";
         var store = new StateStore();
-        var clock = new NativeStateIntegrationTests.ManualClock();
+        var clock = new FixedClock();
         store.BeginScan(1, true);
         await new MchoseBatterySource(log, clock).ReadAsync(new(1, true), batch => store.Apply(1, batch, clock.GetUtcNow()), CancellationToken.None);
         store.EndScan(1);
@@ -240,6 +240,13 @@ public sealed class AppDiagnosticLogTests
         Assert.Same(raw, await channel.ReadInputReportAsync(CancellationToken.None));
         log.Record("later", new { });
         Assert.Equal(stoppedAt, output.Length);
+    }
+
+    private sealed class FixedClock : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(2026, 11, 5, 0, 0, 0, TimeSpan.Zero);
+        public override long GetTimestamp() => 0;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
     }
 
     private static HidInterface Receiver() => new(

@@ -1,9 +1,9 @@
-using BatteryManager.App;
+using BatteryManager.Application;
 using BatteryManager.Core;
 using BatteryManager.WindowsNative;
 using Xunit;
 
-namespace BatteryManager.WindowsNative.Tests;
+namespace BatteryManager.App.Logic.Tests;
 
 public sealed class TrayPreferenceIdentityTests
 {

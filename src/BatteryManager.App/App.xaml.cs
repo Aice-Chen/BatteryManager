@@ -1,10 +1,12 @@
 using BatteryManager.Core;
 using BatteryManager.WindowsNative;
+using BatteryManager.Application.Installation;
+using BatteryManager.Application.Updates;
 using Microsoft.UI.Xaml;
 
 namespace BatteryManager.App;
 
-public partial class App : Application
+public partial class App : Microsoft.UI.Xaml.Application
 {
     private SingleInstance? _instance;
     private BatterySession? _session;
@@ -20,6 +22,14 @@ public partial class App : Application
     private AppTestClock? _testClock;
     private AppScenarios? _scenarios;
     private TrayPreferencesStore? _preferencesStore;
+    private AppDataPaths? _dataPaths;
+    private AppManagementController? _management;
+    private LocalUpdateFixture? _updateFixture;
+    private Task<string?>? _installationPreflight;
+    private bool _preparingInstallation;
+    private Task<VerifiedInstaller>? _installerVerification;
+    private CancellationTokenSource? _installerVerificationCancellation;
+    private static string _logDirectory = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
     private IReadOnlyList<TrayPreference> _priorities = [];
     private string? _preferencesWarning;
     private Task<string?>? _savePreferences;
@@ -44,7 +54,7 @@ public partial class App : Application
     {
         try
         {
-            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
+            var path = _logDirectory;
             System.IO.Directory.CreateDirectory(path);
             var file = System.IO.Path.Combine(path, "last-error.txt");
             System.IO.File.WriteAllText(file, $"{DateTimeOffset.UtcNow:O}\n{message}\n{exception}");
@@ -67,8 +77,10 @@ public partial class App : Application
         string? scenarioName;
         try
         {
-            testPipe = AppTestHost.PipeName(arguments);
-            scenarioName = AppScenarios.NameFromArguments(arguments);
+            var launch = LocalUpdateFixture.ExtractArguments(arguments);
+            testPipe = AppTestHost.PipeName(launch.RemainingArguments);
+            scenarioName = AppScenarios.NameFromArguments(launch.RemainingArguments);
+            if (launch.FixturePath is not null) _updateFixture = LocalUpdateFixture.Load(launch.FixturePath);
         }
         catch (Exception error)
         {
@@ -92,12 +104,29 @@ public partial class App : Application
             _clock = _scenarios.Clock;
             if (testPipe is not null) _prioritySaveTest = new();
         }
+        else
+        {
+            try
+            {
+                _dataPaths = AppDataPaths.Resolve(AppContext.BaseDirectory,
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+                _logDirectory = _dataPaths.LogsDirectory;
+            }
+            catch (Exception error)
+            {
+                RecordCrash(error, "Application data location could not be resolved");
+                Environment.ExitCode = 2;
+                _instance.Dispose();
+                Exit();
+                return;
+            }
+        }
         if (testPipe is not null)
         {
             if (_scenarios is null) _clock = _testClock = new AppTestClock();
             try
             {
-                var directory = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
+                var directory = _logDirectory;
                 System.IO.Directory.CreateDirectory(directory);
                 var path = System.IO.Path.Combine(directory, $"diagnostic-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Environment.ProcessId}.jsonl");
                 _diagnostics = new AppDiagnosticLog(_scenarios?.HidIo ?? new WindowsHidIo(), path);
@@ -106,7 +135,7 @@ public partial class App : Application
         }
         if (_scenarios is null)
         {
-            _preferencesStore = new TrayPreferencesStore(System.IO.Path.Combine(AppContext.BaseDirectory, "settings.json"));
+            _preferencesStore = new TrayPreferencesStore(_dataPaths!.SettingsPath);
             var loaded = _preferencesStore.Load();
             _priorities = loaded.Priorities;
             _preferencesWarning = loaded.Error;
@@ -115,6 +144,11 @@ public partial class App : Application
         _session = new BatterySession(_scenarios?.CreateSource(_diagnostics) ?? DeviceSources.CreateDefault(_diagnostics, _clock), _clock);
         _session.SetDeviceLinks(_settings.DeviceLinks);
         _window = new MainWindow(_session, scenarioMode: _scenarios is not null);
+        if (_updateFixture is not null)
+        {
+            _window.MarkLocalUpdateFixture();
+            _diagnostics?.Record("update-fixture-enabled", new { fixture = _updateFixture.FilePath, networkFallback = false, publishedRelease = false });
+        }
         // Win32 callbacks must return before re-entering WinUI window activation/layout.
         _tray = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(_window),
             () => _window.DispatcherQueue.TryEnqueue(_window.ShowWindow),
@@ -133,6 +167,12 @@ public partial class App : Application
         _window.MergeRequested = SaveDeviceLinkAsync;
         _window.UnmergeRequested = RemoveDeviceLinkAsync;
         _window.UndoMergeRequested = UndoDeviceLinkAsync;
+        _management = new AppManagementController(_window,
+            _dataPaths ?? AppDataPaths.Parse(AppContext.BaseDirectory, AppContext.BaseDirectory, null),
+            _scenarios is not null, RequestInstallationAsync, testPipe is not null, _updateFixture,
+            (url, status) => _diagnostics?.Record("update-fixture-response", new { url, status, networkAccessed = false }));
+        _window.ManagementOpened = _management.RefreshStartup;
+        _window.Activated += (_, _) => { if (_window.CanManageApplication) _management?.RefreshStartup(); };
         // Tray priority is edited in place on the settings page and saved on every change.
         var aliases = _settings.DeviceCustomizations.Where(c => c.Name is not null).ToDictionary(c => c.DeviceId, c => c.Name!, StringComparer.Ordinal);
         _window.TrayPriority.Initialize(_priorities.Select(p => p with { Name = aliases.GetValueOrDefault(p.DeviceId, p.Name) }).ToArray(),
@@ -146,6 +186,7 @@ public partial class App : Application
         ApplyThemes();
         RenderPresentation(_session.Snapshot);
         _window.Activate();
+        _management.Start();
         _ = ObserveAsync(_session, _updates.Token);
         if (_scenarios is null)
         {
@@ -166,7 +207,7 @@ public partial class App : Application
                     () => new(DateTimeOffset.UtcNow, _session.Snapshot, _window.CaptureTestView(), _diagnostics?.FilePath,
                         _tray.CaptureTestView(), new(_priorities, _preferencesWarning, _window.TrayPriority.CaptureDraft()), _power?.Capture(), _testClock?.Capture(),
                         _scenarios?.Capture(), AppManagedMemory.Capture(), AppBuildInfo.InformationalVersion,
-                        _panel?.Capture(), _themes?.Capture(), _window.CaptureUiState(), _settings, _window.CaptureMergeState()),
+                        _panel?.Capture(), _themes?.Capture(), _window.CaptureUiState(), _settings, _window.CaptureMergeState(), _window.Management.Capture()),
                     token => _window.RefreshAsync(token), QuitAsync, RecordCrash, ApplyPreferencesTestActionAsync,
                     action => (_power ?? throw new InvalidOperationException("Power notifications are unavailable.")).InjectForTest(action),
                     action => (_testClock ?? throw new InvalidOperationException("Test clock is unavailable.")).SetOffset(action), ApplyScenarioAsync, ApplyUiActionAsync);
@@ -213,7 +254,7 @@ public partial class App : Application
     // The tray menu's "托盘设置" and the settings entry open the settings page at the tray priority.
     private void OpenTrayPreferences()
     {
-        if (_quitting || _window is null || _session is null) return;
+        if (_quitting || _preparingInstallation || _window is null || _session is null) return;
         _window.ShowWindow();
         _window.ShowTrayPriority();
     }
@@ -369,7 +410,71 @@ public partial class App : Application
         }
     }
 
-    private async Task QuitAsync()
+    private Task QuitAsync() => QuitCoreAsync(null, false);
+    private async Task RequestInstallationAsync(UpdatePackage package, string file, bool simulated)
+    {
+        if (_quitting || _preparingInstallation) return;
+        if (simulated && _scenarios is null) throw new InvalidOperationException("Simulated installation requires a scenario.");
+        if (!simulated && _dataPaths?.IsInstalled != true) throw new InvalidOperationException("开发运行目录不支持安装更新，请从安装版操作。");
+        _preparingInstallation = true;
+        _window!.SetInstallationPreparing(true);
+        try
+        {
+            // Freeze new edits, but let the priority panel commit every draft already accepted.
+            // This task deliberately excludes QuitCoreAsync, so an ordinary quit can wait for it.
+            _diagnostics?.Record("installation-preflight-started", new { simulated });
+            _installationPreflight = FlushPreferencesForInstallationAsync();
+            var saveError = await _installationPreflight;
+            if (_quitting) return;
+            if (saveError is not null)
+            {
+                _diagnostics?.Record("installation-preflight-failed", new { simulated, error = saveError });
+                _window.ShowInstallationPreparationError(saveError);
+                return;
+            }
+            _diagnostics?.Record("installation-preflight-completed", new { simulated });
+            if (simulated) { await QuitCoreAsync(null, true); return; }
+            using var cancellation = new CancellationTokenSource();
+            _installerVerificationCancellation = cancellation;
+            _installerVerification = VerifiedInstaller.OpenAsync(file, _dataPaths!.UpdatesDirectory, package, cancellation.Token);
+            using var verified = await _installerVerification;
+            if (!_quitting) await QuitCoreAsync(verified, false);
+        }
+        catch (OperationCanceledException) when (_quitting) { }
+        finally
+        {
+            _installationPreflight = null;
+            _installerVerification = null;
+            _installerVerificationCancellation = null;
+            _preparingInstallation = false;
+            if (!_quitting) _window.SetInstallationPreparing(false);
+        }
+    }
+    private async Task<string?> FlushPreferencesForInstallationAsync()
+    {
+        // Only failures from work still pending at confirmation stop this attempt. A later
+        // explicit retry may install with the last successfully saved, rolled-back settings.
+        var acceptedSave = _savePreferences is { } save && (!save.IsCompleted || _window!.HasPendingDeviceChanges) ? save : null;
+        var priorityWasSaving = _window!.TrayPriority.CaptureDraft().IsSaving;
+        try
+        {
+            await _window.TrayPriority.FlushPendingChangesAsync();
+            string? error = acceptedSave is null ? null : await acceptedSave;
+            if (priorityWasSaving && !await _window.TrayPriority.SaveDraftAsync())
+                error ??= _window.TrayPriority.CaptureDraft().Error ?? UiText.Get("SaveFailed");
+            // A second queued priority draft can replace the app's latest save task.
+            if (_savePreferences is { } latest && !ReferenceEquals(latest, acceptedSave) && priorityWasSaving)
+                error ??= await latest;
+            await _window.FlushDeviceChangesAsync();
+            return error;
+        }
+        catch (Exception error)
+        {
+            RecordCrash(error, "Settings save before installation failed");
+            return UiText.Get("SaveFailed");
+        }
+    }
+    private async Task QuitCoreAsync(VerifiedInstaller? installer, bool simulatedInstallation)
     {
         if (_quitting) return;
         _quitting = true;
@@ -381,6 +486,15 @@ public partial class App : Application
         _prioritySaveTest?.ReleaseForExit();
         try
         {
+            if (_installationPreflight is { } preflight) await preflight;
+            if (installer is null && _installerVerification is { } verification)
+            {
+                if (_installerVerificationCancellation is { } cancellation) await cancellation.CancelAsync();
+                try { (await verification).Dispose(); }
+                catch (OperationCanceledException) { }
+                catch (Exception error) { RecordCrash(error, "Installer verification canceled during exit"); }
+            }
+            if (_management is not null) await _management.StopAsync();
             if (_testHost is not null)
             {
                 try { await _testHost.StopAsync(); }
@@ -396,6 +510,32 @@ public partial class App : Application
                 _diagnostics?.Record("priority-save-drained", new { simulated = true, order = _priorities.Select(p => p.DeviceId).ToArray() });
             if (_session is not null) await _session.StopAndDrainAsync();
             _diagnostics?.Record("session-stopped", new { physicallyDrained = true });
+            if (simulatedInstallation)
+                _diagnostics?.Record("installer-launch", new { simulated = true, physicallyDrained = true });
+            else if (installer is not null)
+                installer.Launch(path =>
+                {
+                    var start = new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true };
+                    start.ArgumentList.Add("/CURRENTUSER"); start.ArgumentList.Add("/NORESTART");
+                    start.ArgumentList.Add("/NOCLOSEAPPLICATIONS");
+                    start.ArgumentList.Add("/WAITPID=" + Environment.ProcessId);
+                    start.ArgumentList.Add("/DIR=" + _dataPaths!.AppDirectory);
+                    if (_updateFixture is not null)
+                    {
+                        start.ArgumentList.Add("/VERYSILENT"); start.ArgumentList.Add("/SUPPRESSMSGBOXES"); start.ArgumentList.Add("/SP-");
+                        start.ArgumentList.Add("/LOG=" + _updateFixture.InstallerLogPath);
+                    }
+                    using var process = System.Diagnostics.Process.Start(start)
+                        ?? throw new InvalidOperationException("安装程序未能启动。");
+                    _diagnostics?.Record("installer-launch", new { simulated = false, physicallyDrained = true,
+                        processId = process.Id, file = path, localUpdateFixture = _updateFixture is not null });
+                });
+        }
+        catch (Exception error)
+        {
+            RecordCrash(error, "Shutdown or installation handoff failed");
+            if (installer is not null)
+                await _window!.Management.ShowInstallErrorAsync(error.Message);
         }
         finally
         {
@@ -450,7 +590,7 @@ public partial class App : Application
 
     private Task<string?> BeginDeviceLinkSave(DeviceLinkMember? primary, DeviceLinkMember? other, string? removeId, bool undo = false)
     {
-        if (_quitting) return Task.FromResult<string?>(UiText.Pick("程序正在退出", "The app is quitting"));
+        if (_quitting || _preparingInstallation) return Task.FromResult<string?>(UiText.Pick("程序正在准备退出，请稍后重试。", "The app is preparing to exit. Try again shortly."));
         if (_preferencesWarning is not null) return Task.FromResult<string?>(_preferencesWarning);
         if (_scenarios?.Capture().Applying == true) return Task.FromResult<string?>(UiText.Pick("请等待演示场景切换完成。", "Wait for the scenario change to finish."));
         if (_savePreferences is { IsCompleted: false } || _window!.TrayPriority.CaptureDraft() is { IsSaving: true } or { IsDragging: true })
@@ -503,7 +643,7 @@ public partial class App : Application
             return committed ? UiText.Pick("已保存，但显示没有更新。请重新启动程序。", "Saved, but the display did not update. Restart the app.")
                 : UiText.Get("SaveFailed");
         }
-        finally { if (_window is not null) _window.TrayPriority.IsEnabled = !_quitting && _scenarios?.Capture().Applying != true; }
+        finally { if (_window is not null) _window.TrayPriority.IsEnabled = !_quitting && !_preparingInstallation && _scenarios?.Capture().Applying != true; }
     }
 
     private IReadOnlyList<DeviceState> NamedDevices(IReadOnlyList<DeviceState> devices)
@@ -526,7 +666,7 @@ public partial class App : Application
 
     private async Task<string?> SaveColorModeAsync(MainColorMode mode)
     {
-        if (_quitting) return UiText.Pick("程序正在退出", "The app is quitting");
+        if (_quitting || _preparingInstallation) return UiText.Pick("程序正在准备退出，请稍后重试。", "The app is preparing to exit. Try again shortly.");
         if (_preferencesWarning is not null) return _preferencesWarning;
         if (_savePreferences is { IsCompleted: false }) return UiText.Pick("正在保存", "Saving");
         return await (_savePreferences = SaveAppearanceCoreAsync(mode, null));
@@ -534,7 +674,7 @@ public partial class App : Application
 
     private async Task<string?> SaveCustomizationAsync(DeviceCustomization customization)
     {
-        if (_quitting) return UiText.Pick("程序正在退出", "The app is quitting");
+        if (_quitting || _preparingInstallation) return UiText.Pick("程序正在准备退出，请稍后重试。", "The app is preparing to exit. Try again shortly.");
         if (_preferencesWarning is not null) return _preferencesWarning;
         if (_savePreferences is { IsCompleted: false }) return UiText.Pick("正在保存", "Saving");
         return await (_savePreferences = SaveAppearanceCoreAsync(null, customization));
@@ -574,6 +714,11 @@ public partial class App : Application
 
     private async Task ApplyUiActionAsync(string action, string? value, string? deviceId)
     {
+        if (action.StartsWith("management-", StringComparison.Ordinal))
+        {
+            await (_management ?? throw new InvalidOperationException("Management is unavailable.")).ApplyTestActionAsync(action, value);
+            return;
+        }
         if (_quitting) throw new InvalidOperationException("The app is quitting.");
         switch (action)
         {
@@ -587,7 +732,7 @@ public partial class App : Application
                 break;
             case "capture-tray-glyphs":
                 if (_scenarios is null) throw new InvalidOperationException("Glyph diagnostics require an isolated scenario.");
-                await TrayGlyphDiagnostics.ExportAsync(Path.Combine(AppContext.BaseDirectory, "logs", "tray-glyphs")); break;
+                await TrayGlyphDiagnostics.ExportAsync(Path.Combine(_logDirectory, "tray-glyphs")); break;
             case "animations":
                 if (_scenarios is null) throw new InvalidOperationException("Animation overrides require an isolated scenario.");
                 Motion.TestEnabled = value switch { "on" => true, "off" => false, "reset" => null, _ => throw new ArgumentException("Use on, off or reset.") }; break;
@@ -691,7 +836,7 @@ public partial class App : Application
         if (_scenarios is null) throw new InvalidOperationException("Image capture is available only for fictional scenarios.");
         if (string.IsNullOrEmpty(name) || name.Length > 64 || !name.EndsWith(".png", StringComparison.Ordinal)
             || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '.'))) throw new ArgumentException("Use a simple PNG filename.");
-        var path = Path.Combine(AppContext.BaseDirectory, "logs", "screenshots");
+        var path = Path.Combine(_logDirectory, "screenshots");
         Directory.CreateDirectory(path);
         return path;
     }
