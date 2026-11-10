@@ -12,7 +12,7 @@ internal sealed record AvailableUpdate(string Version, Uri ReleaseUri, IReadOnly
 
 // No credentials are needed to read the project's published releases. Package URLs must
 // belong to this repository and tag; redirects are limited to GitHub's HTTPS asset hosts.
-internal sealed class ReleaseUpdateClient : IDisposable
+internal sealed class ReleaseUpdateClient : IReleaseUpdateClient, IDisposable
 {
     internal const string Repository = "Aice-Chen/BatteryManager";
     private const int MaximumMetadataBytes = 1024 * 1024;

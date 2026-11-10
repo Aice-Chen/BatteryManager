@@ -52,7 +52,7 @@ internal sealed record AppTestStatus(DateTimeOffset At, SessionSnapshot Session,
     AppTestTray? Tray = null, AppTestPreferences? Preferences = null, AppTestPower? Power = null, AppTestClockState? Clock = null,
     AppScenarioState? Scenario = null, AppManagedMemory? Memory = null, string? AppVersion = null,
     AppTestPanel? Panel = null, AppThemeState? Theme = null, MainUiState? UiState = null, AppPreferences? Settings = null,
-    DeviceMergeState? DeviceMerge = null);
+    DeviceMergeState? DeviceMerge = null, ManagementPanelState? Management = null);
 internal sealed record AppTestResponse(bool Ok, AppTestStatus? Status = null, RefreshResult? Result = null, string? Error = null);
 internal sealed record AppManagedMemory(long ManagedBytes, long HeapSizeBytes, long TotalCommittedBytes,
     long FragmentedBytes, int Gen0Collections, int Gen1Collections, int Gen2Collections)
@@ -246,6 +246,10 @@ internal sealed class AppTestHost
                         await _scenario(action!, token);
                         return new AppTestResponse(true, _capture());
                     }, cancellationToken, TimeSpan.FromSeconds(15)).ConfigureAwait(false),
+                    // Installation also stops this host: acknowledge the request before
+                    // dispatching the scenario-only shutdown action, just like quit.
+                    "ui" when action == "management-install-start" =>
+                        await OnUiAsync(_ => Task.FromResult(new AppTestResponse(true, _capture())), cancellationToken, TimeSpan.FromSeconds(5)).ConfigureAwait(false),
                     "ui" => await OnUiAsync(async _ =>
                     {
                         await _ui(action!, uiValue, deviceId);
@@ -257,6 +261,15 @@ internal sealed class AppTestHost
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
             catch (Exception error) { response = new(false, Error: Describe(error)); }
             await WriteAsync(pipe, response, cancellationToken).ConfigureAwait(false);
+            if (command == "ui" && action == "management-install-start" && response.Ok)
+            {
+                if (!_dispatcher.TryEnqueue(async () =>
+                {
+                    try { await _ui(action!, uiValue, deviceId); }
+                    catch (Exception error) { _report(error, "App test installation failed"); }
+                })) _report(new InvalidOperationException("The UI dispatcher rejected the install request."), "App test install dispatch failed");
+                return;
+            }
             if (command == "quit" && response.Ok)
             {
                 _quitRequested = true;

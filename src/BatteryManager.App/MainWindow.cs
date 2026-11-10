@@ -14,7 +14,9 @@ namespace BatteryManager.App;
 internal sealed record MainUiState(string Page, string MainTheme, string? DialogKind, string? DialogDeviceId,
     string? DialogValue, bool DialogSaving, string? DialogError,
     double? TypeListMaxHeight = null, double? TypeListActualHeight = null, double WindowHeight = 0,
-    RefreshMotionState? RefreshMotion = null, bool? TypeLastOptionVisible = null);
+    RefreshMotionState? RefreshMotion = null, bool? TypeLastOptionVisible = null,
+    bool PreparingInstallation = false, string? SettingsError = null,
+    bool PreferencesEnabled = true, bool AppearanceEnabled = true, bool BackEnabled = true);
 
 internal sealed class MainWindow : Window
 {
@@ -44,6 +46,12 @@ internal sealed class MainWindow : Window
     private readonly Button _back;
     /// <summary>Tray device priority, edited in place on the settings page.</summary>
     public TrayPriorityPanel TrayPriority { get; } = new();
+    public ManagementPanel Management { get; } = new();
+    public Action? ManagementOpened { get; set; }
+    public bool CanManageApplication => _settingsVisible && !_quitting && !_preparingInstallation && AppWindow.IsVisible;
+    private readonly InfoBar _updateNotice = new() { IsOpen = false, IsClosable = true, Margin = new Thickness(0, 0, 0, 8) };
+    private string? _availableUpdateVersion;
+    private string? _dismissedUpdateVersion;
     /// <summary>Session candidates and saved groups for "合并连接". Merging starts from a card's menu;
     /// the result and its undo appear in an info bar above the cards.</summary>
     public DeviceMergeCandidates Merge { get; } = new();
@@ -63,7 +71,8 @@ internal sealed class MainWindow : Window
     private long _deviceUiRevision;
     private Task<bool> _dialogSave = Task.FromResult(false);
     private Task _mergeOperation = Task.CompletedTask;
-    private bool CanDeviceActions => !_quitting && !_scenarioChanging && !_settingsVisible && AppWindow.IsVisible;
+    public bool HasPendingDeviceChanges => !_dialogSave.IsCompleted || !_mergeOperation.IsCompleted || _colorSave is { IsCompleted: false };
+    private bool CanDeviceActions => !_quitting && !_preparingInstallation && !_scenarioChanging && !_settingsVisible && AppWindow.IsVisible;
     private readonly ComboBox _colorMode = new() { MinWidth = 160 };
     private readonly FontIcon _refreshIcon = new() { Glyph = "\uE72C", FontSize = 16 };
     private readonly RefreshSpin _spin;
@@ -74,11 +83,13 @@ internal sealed class MainWindow : Window
     private IReadOnlyList<DeviceCustomization> _customizations = [];
     private MainColorMode _savedMode;
     private string? _preferencesWarning;
+    private string? _installationPreparationError;
     private bool _settingMode;
     private bool _settingsVisible;
     private bool _allowClose;
     private bool _scenarioChanging;
     private bool _quitting;
+    private bool _preparingInstallation;
     private long _lastVersion = -1;
     private Task? _colorSave;
     private ContentDialog? _dialog;
@@ -151,15 +162,21 @@ internal sealed class MainWindow : Window
         Grid.SetColumn(actions, 2); heading.Children.Add(actions); _root.Children.Add(heading);
         _spin = new RefreshSpin(_refreshIcon);
         _devicePage.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        _devicePage.RowDefinitions.Add(new() { Height = GridLength.Auto });
         _devicePage.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
         _mergeNotice.ActionButton = _undo;
         _undo.Click += async (_, _) => await UndoMergeAsync();
         _mergeNotice.Closed += (_, _) => { if (!_mergeNotice.IsOpen) _noticeKind = null; };
         AutomationProperties.SetName(_undo, UiText.Get("Undo"));
         _devicePage.Children.Add(_mergeNotice);
+        var showUpdate = new Button { Content = UiText.Pick("查看更新", "View update") };
+        showUpdate.Click += (_, _) => ShowSettings(true);
+        _updateNotice.ActionButton = showUpdate;
+        _updateNotice.Closed += (_, _) => _dismissedUpdateVersion = _availableUpdateVersion;
+        Grid.SetRow(_updateNotice, 1); _devicePage.Children.Add(_updateNotice);
         _deviceScroll.Content = _cards;
-        Grid.SetRow(_deviceScroll, 1); _devicePage.Children.Add(_deviceScroll);
-        Grid.SetRow(_empty, 1); _devicePage.Children.Add(_empty);
+        Grid.SetRow(_deviceScroll, 2); _devicePage.Children.Add(_deviceScroll);
+        Grid.SetRow(_empty, 2); _devicePage.Children.Add(_empty);
         Grid.SetRow(_devicePage, 1); _root.Children.Add(_devicePage);
         _settingsContent.Children.Add(SectionTitle("Tray", first: true));
         _settingsContent.Children.Add(TrayPriority);
@@ -167,10 +184,11 @@ internal sealed class MainWindow : Window
         foreach (var mode in Enum.GetValues<MainColorMode>()) _colorMode.Items.Add(new ComboBoxItem { Tag = mode, Content = UiText.Get(mode.ToString()) });
         _colorMode.SelectionChanged += async (_, _) =>
         {
-            if (_settingMode || _colorMode.SelectedItem is not ComboBoxItem { Tag: MainColorMode mode }) return;
+            if (_settingMode || _preparingInstallation || _quitting || _colorMode.SelectedItem is not ComboBoxItem { Tag: MainColorMode mode }) return;
             _colorSave = SaveModeAsync(mode); await _colorSave;
         };
         _settingsContent.Children.Add(SettingCard("\uE790", UiText.Get("ColorMode"), _colorMode, UiText.Get("ThemeHint")));
+        _settingsContent.Children.Add(Management);
         _settingsContent.Children.Add(SectionTitle("About"));
         var version = new TextBlock { Text = AppBuildInfo.Version, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextLineBounds = TextLineBounds.Tight };
         _settingSubTexts.Add(version);
@@ -198,6 +216,7 @@ internal sealed class MainWindow : Window
 
     public void HideToTray()
     {
+        Management.HideConfirmation();
         TrayPriority.SetWindowVisible(false);
         _deviceUiRevision++;
         if (!_dialogSaving) _dialog?.Hide();
@@ -213,6 +232,8 @@ internal sealed class MainWindow : Window
     }
     public void ShowSettings(bool show)
     {
+        if (_quitting || _preparingInstallation) return;
+        if (!show) Management.HideConfirmation();
         if (show && !_settingsVisible)
         {
             _deviceUiRevision++;
@@ -226,6 +247,14 @@ internal sealed class MainWindow : Window
         _settings.Visibility = _refresh.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
         _title.Text = UiText.Get(show ? "Settings" : "Devices");
         if (show) _back.Focus(FocusState.Programmatic); else _settings.Focus(FocusState.Programmatic);
+        if (show) ManagementOpened?.Invoke();
+    }
+    public void SetUpdateAvailable(string? version)
+    {
+        _availableUpdateVersion = version;
+        if (version is null) { _updateNotice.IsOpen = false; return; }
+        _updateNotice.Title = UiText.Pick($"有新版本 {version}", $"Version {version} is available");
+        if (version != _dismissedUpdateVersion) _updateNotice.IsOpen = true;
     }
     public void SetPreferences(IReadOnlyList<DeviceCustomization> customizations, MainColorMode mode, string? warning = null)
     {
@@ -233,7 +262,7 @@ internal sealed class MainWindow : Window
         _settingMode = true;
         try { _colorMode.SelectedIndex = (int)mode; }
         finally { _settingMode = false; }
-        SetSettingsError(warning);
+        SetSettingsError(_installationPreparationError ?? warning);
     }
     private async Task SaveModeAsync(MainColorMode mode)
     {
@@ -248,11 +277,40 @@ internal sealed class MainWindow : Window
         finally
         {
             _settingMode = true; _colorMode.SelectedIndex = (int)_savedMode; _settingMode = false;
-            _colorMode.IsEnabled = !_quitting;
+            _colorMode.IsEnabled = !_quitting && !_preparingInstallation;
         }
     }
     private void SetSettingsError(string? error)
     { _settingsError.Text = error ?? ""; _settingsError.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible; }
+
+    public void SetInstallationPreparing(bool preparing)
+    {
+        _preparingInstallation = preparing;
+        if (_quitting) return;
+        // Disabling the panel invalidates an unfinished drag without discarding its
+        // accepted save queue. The page and navigation stay frozen until preflight ends.
+        _settingsPage.IsEnabled = _deviceScroll.IsEnabled = !preparing;
+        _back.IsEnabled = _settings.IsEnabled = !preparing;
+        TrayPriority.IsEnabled = !preparing && !_scenarioChanging && !_mergeBusy;
+        _colorMode.IsEnabled = !preparing && _colorSave is not { IsCompleted: false };
+        _undo.IsEnabled = !preparing && !_mergeBusy;
+        if (preparing)
+        {
+            _installationPreparationError = null;
+            SetSettingsError(_preferencesWarning);
+            _deviceUiRevision++;
+            if (!_dialogSaving) _dialog?.Hide();
+        }
+    }
+
+    public void ShowInstallationPreparationError(string error)
+    {
+        if (_quitting) return;
+        _installationPreparationError = UiText.Pick("设置未保存，已停止安装。请检查设置后重试。", "Settings were not saved, so installation was stopped. Review your settings and try again.")
+            + Environment.NewLine + error;
+        SetSettingsError(_installationPreparationError);
+        _settingsError.StartBringIntoView();
+    }
 
     public void Apply(SessionSnapshot snapshot, IReadOnlyList<DeviceDisplay>? displays = null)
     {
@@ -546,7 +604,7 @@ internal sealed class MainWindow : Window
             if (error is null) CloseMergeNotice(); else ShowMergeNotice("error", error, revision, retryKind);
         }
         catch { ShowMergeNotice("error", UiText.Get("SaveFailed"), revision, retryKind); }
-        finally { _mergeBusy = false; _undo.IsEnabled = !_quitting; }
+        finally { _mergeBusy = false; _undo.IsEnabled = !_quitting && !_preparingInstallation; }
     }
     // A failed undo keeps its retry action. The store still validates that the
     // saved settings match the operation before allowing any retry to restore it.
@@ -560,7 +618,12 @@ internal sealed class MainWindow : Window
         _mergeNotice.IsOpen = true;
     }
     private void CloseMergeNotice() { _noticeKind = null; _mergeNotice.IsOpen = false; }
-    public async Task FlushDeviceChangesAsync() { await _dialogSave; await _mergeOperation; }
+    public async Task FlushDeviceChangesAsync()
+    {
+        await _dialogSave;
+        await _mergeOperation;
+        if (_colorSave is { } colorSave) await colorSave;
+    }
     internal DeviceMergeState CaptureMergeState() => new(Merge.Groups, _dialogKind == "merge" ? _dialogDevice?.Id : null,
         _dialogKind == "merge" ? _mergeCandidates : [],
         (_mergeInput?.SelectedItem as ListViewItem)?.Tag as string, _mergeNote?.Text,
@@ -621,7 +684,7 @@ internal sealed class MainWindow : Window
             case "dialog-cancel":
                 if (_dialogSaving) throw new InvalidOperationException("A save is in progress."); _dialog?.Hide(); return;
             case "theme":
-                if (_dialog is not null || _colorSave is { IsCompleted: false }) throw new InvalidOperationException("Settings are busy.");
+                if (_preparingInstallation || _dialog is not null || _colorSave is { IsCompleted: false }) throw new InvalidOperationException("Settings are busy.");
                 if (!Enum.TryParse<MainColorMode>(value, out var mode) || !Enum.IsDefined(mode)) throw new ArgumentException("Unknown color mode.");
                 _colorMode.SelectedIndex = (int)mode; if (_colorSave is not null) await _colorSave; return;
             default: throw new ArgumentException("Unknown main-window test action.");
@@ -631,7 +694,9 @@ internal sealed class MainWindow : Window
         _dialogKind, _dialogDevice?.Id, _nameInput?.Text ?? (_typeInput is null ? null : ((_typeInput.SelectedItem as ListViewItem)?.Tag?.ToString() ?? "Automatic"))
             ?? ((_mergeInput?.SelectedItem as ListViewItem)?.Tag as string),
         _dialogSaving, _dialogError, _typeInput?.MaxHeight, _typeInput?.ActualHeight,
-        _root.XamlRoot?.Size.Height ?? 0, _spin.Capture(), LastTypeOptionVisible());
+        _root.XamlRoot?.Size.Height ?? 0, _spin.Capture(), LastTypeOptionVisible(),
+        _preparingInstallation, _settingsError.Visibility == Visibility.Visible ? _settingsError.Text : null,
+        TrayPriority.IsEnabled, _colorMode.IsEnabled, _back.IsEnabled);
     private async Task SaveDialogForTestAsync() { if (await SaveDialogAsync(false)) _dialog?.Hide(); }
     internal void ResizeForTest(int width, int height) => AppWindow.Resize(new(width, height));
     internal FrameworkElement? DialogForTest => _dialog;
@@ -675,7 +740,7 @@ internal sealed class MainWindow : Window
         _scenarioBanner.Text = $"演示数据 · {name}{(changing ? " · 正在切换" : "")}";
         Title = $"Battery Manager {AppBuildInfo.Version} — 演示数据 ({name})";
         _titleText.Text = Title;
-        TrayPriority.IsEnabled = !changing && !_quitting;
+        TrayPriority.IsEnabled = !changing && !_quitting && !_preparingInstallation;
         Apply(_session.Snapshot);
     }
     public void RefreshTheme()
@@ -690,6 +755,7 @@ internal sealed class MainWindow : Window
         foreach (var text in _settingTexts) text.Foreground = UiText.InkFor(_root);
         foreach (var text in _settingSubTexts) text.Foreground = UiText.MutedFor(_root);
         TrayPriority.RefreshTheme();
+        Management.RefreshTheme();
         if (_dialog is not null) _dialog.RequestedTheme = _root.ActualTheme;
         RefreshMergeChoices(force: true);
         PaintCaptionButtons();
@@ -737,6 +803,7 @@ internal sealed class MainWindow : Window
     }
     public void PrepareToExit()
     {
+        Management.Stop();
         TrayPriority.StopAcceptingChanges();
         _quitting = true; _refresh.IsEnabled = _settings.IsEnabled = TrayPriority.IsEnabled = _colorMode.IsEnabled = _undo.IsEnabled = false;
         _spin.Stop();
