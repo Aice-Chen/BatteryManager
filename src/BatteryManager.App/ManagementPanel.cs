@@ -10,7 +10,7 @@ namespace BatteryManager.App;
 
 internal sealed record ManagementPanelState(string UpdatePhase, string StatusText, bool AutoCheck,
     bool CheckEnabled, bool DownloadVisible, bool InstallVisible, bool Busy,
-    string StartupStatus, bool StartupEnabled, string? Error, bool Simulated, bool ConfirmationOpen);
+    string StartupStatus, bool StartupEnabled, string? Error, bool Simulated, bool ConfirmationOpen, bool LocalUpdateFixture = false);
 
 // Owns only the settings controls. HTTP, persistence and registry work live in services.
 internal sealed class ManagementPanel : StackPanel
@@ -40,6 +40,7 @@ internal sealed class ManagementPanel : StackPanel
     private StartupState? _startupState;
     private string? _actionError;
     private bool _simulated;
+    private bool _localUpdateFixture;
     private ContentDialog? _confirmation;
 
     public Func<bool, Task>? ChangeStartup { get; set; }
@@ -105,6 +106,17 @@ internal sealed class ManagementPanel : StackPanel
         _update = update; _startupState = startup; _simulated = simulated; _actionError = actionError; Render();
     }
     public void Stop() { _stopped = true; HideConfirmation(); Render(); }
+    public void MarkLocalUpdateFixture()
+    {
+        if (_localUpdateFixture) return;
+        _localUpdateFixture = true;
+        var notice = Text();
+        notice.Text = UiText.Pick("本地更新验收：响应来自指定文件，不表示 GitHub 已发布此版本。下载、校验和安装仍会真实执行。",
+            "Local update acceptance: responses come from selected files, not a published GitHub release. Downloads, verification and installation are real.");
+        notice.Margin = new(1, 12, 0, 4);
+        _labels.Add(notice); Children.Insert(0, notice);
+        Render();
+    }
     public void SetPreparingInstallation(bool value) { _preparingInstallation = value; Render(); }
     public void EnableImport(bool installed) => _import.Visibility = installed ? Visibility.Visible : Visibility.Collapsed;
     public void ShowImportResult(bool success)
@@ -148,7 +160,7 @@ internal sealed class ManagementPanel : StackPanel
     public ManagementPanelState Capture() => new(_update?.Phase.ToString() ?? "Idle", _status.Text,
         _automatic.IsOn, _check.IsEnabled, _download.Visibility == Visibility.Visible,
         _install.Visibility == Visibility.Visible, _update?.IsBusy == true,
-        _startupState?.Status.ToString() ?? "Unknown", _startup.IsOn, _error.Text, _simulated, _confirmation is not null);
+        _startupState?.Status.ToString() ?? "Unknown", _startup.IsOn, _error.Text, _simulated, _confirmation is not null, _localUpdateFixture);
 
     private void Render()
     {

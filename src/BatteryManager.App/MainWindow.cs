@@ -214,6 +214,13 @@ internal sealed class MainWindow : Window
         Activate(); NativeMethods.SetForegroundWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
     }
 
+    public void MarkLocalUpdateFixture()
+    {
+        Title += UiText.Pick(" — 本地更新验收", " — Local update acceptance");
+        _titleText.Text = Title;
+        Management.MarkLocalUpdateFixture();
+    }
+
     public void HideToTray()
     {
         Management.HideConfirmation();

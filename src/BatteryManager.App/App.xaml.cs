@@ -24,6 +24,7 @@ public partial class App : Microsoft.UI.Xaml.Application
     private TrayPreferencesStore? _preferencesStore;
     private AppDataPaths? _dataPaths;
     private AppManagementController? _management;
+    private LocalUpdateFixture? _updateFixture;
     private Task<string?>? _installationPreflight;
     private bool _preparingInstallation;
     private Task<VerifiedInstaller>? _installerVerification;
@@ -76,8 +77,10 @@ public partial class App : Microsoft.UI.Xaml.Application
         string? scenarioName;
         try
         {
-            testPipe = AppTestHost.PipeName(arguments);
-            scenarioName = AppScenarios.NameFromArguments(arguments);
+            var launch = LocalUpdateFixture.ExtractArguments(arguments);
+            testPipe = AppTestHost.PipeName(launch.RemainingArguments);
+            scenarioName = AppScenarios.NameFromArguments(launch.RemainingArguments);
+            if (launch.FixturePath is not null) _updateFixture = LocalUpdateFixture.Load(launch.FixturePath);
         }
         catch (Exception error)
         {
@@ -141,6 +144,11 @@ public partial class App : Microsoft.UI.Xaml.Application
         _session = new BatterySession(_scenarios?.CreateSource(_diagnostics) ?? DeviceSources.CreateDefault(_diagnostics, _clock), _clock);
         _session.SetDeviceLinks(_settings.DeviceLinks);
         _window = new MainWindow(_session, scenarioMode: _scenarios is not null);
+        if (_updateFixture is not null)
+        {
+            _window.MarkLocalUpdateFixture();
+            _diagnostics?.Record("update-fixture-enabled", new { fixture = _updateFixture.FilePath, networkFallback = false, publishedRelease = false });
+        }
         // Win32 callbacks must return before re-entering WinUI window activation/layout.
         _tray = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(_window),
             () => _window.DispatcherQueue.TryEnqueue(_window.ShowWindow),
@@ -161,7 +169,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         _window.UndoMergeRequested = UndoDeviceLinkAsync;
         _management = new AppManagementController(_window,
             _dataPaths ?? AppDataPaths.Parse(AppContext.BaseDirectory, AppContext.BaseDirectory, null),
-            _scenarios is not null, RequestInstallationAsync, ImportPortableSettingsAsync);
+            _scenarios is not null, RequestInstallationAsync, ImportPortableSettingsAsync, testPipe is not null, _updateFixture,
+            (url, status) => _diagnostics?.Record("update-fixture-response", new { url, status, networkAccessed = false }));
         _window.ManagementOpened = _management.RefreshStartup;
         _window.Activated += (_, _) => { if (_window.CanManageApplication) _management?.RefreshStartup(); };
         // Tray priority is edited in place on the settings page and saved on every change.
@@ -534,8 +543,15 @@ public partial class App : Microsoft.UI.Xaml.Application
                     start.ArgumentList.Add("/NOCLOSEAPPLICATIONS");
                     start.ArgumentList.Add("/WAITPID=" + Environment.ProcessId);
                     start.ArgumentList.Add("/DIR=" + _dataPaths!.AppDirectory);
+                    if (_updateFixture is not null)
+                    {
+                        start.ArgumentList.Add("/VERYSILENT"); start.ArgumentList.Add("/SUPPRESSMSGBOXES"); start.ArgumentList.Add("/SP-");
+                        start.ArgumentList.Add("/LOG=" + _updateFixture.InstallerLogPath);
+                    }
                     using var process = System.Diagnostics.Process.Start(start)
                         ?? throw new InvalidOperationException("安装程序未能启动。");
+                    _diagnostics?.Record("installer-launch", new { simulated = false, physicallyDrained = true,
+                        processId = process.Id, file = path, localUpdateFixture = _updateFixture is not null });
                 });
         }
         catch (Exception error)

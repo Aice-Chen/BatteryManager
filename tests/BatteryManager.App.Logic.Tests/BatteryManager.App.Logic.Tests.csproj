@@ -15,5 +15,6 @@
     <Compile Include="../../src/BatteryManager.App/AppScenarios.cs" Link="AppScenarios.cs" />
     <Compile Include="../../src/BatteryManager.App/TrayPanelPlacement.cs" Link="TrayPanelPlacement.cs" />
     <Compile Include="../../src/BatteryManager.App/Platform/WindowsStartupRegistry.cs" Link="Platform/WindowsStartupRegistry.cs" />
+    <Compile Include="../../src/BatteryManager.App/LocalUpdateFixture.cs" Link="LocalUpdateFixture.cs" />
   </ItemGroup>
 </Project>

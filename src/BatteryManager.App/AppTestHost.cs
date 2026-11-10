@@ -247,7 +247,7 @@ internal sealed class AppTestHost
                         return new AppTestResponse(true, _capture());
                     }, cancellationToken, TimeSpan.FromSeconds(15)).ConfigureAwait(false),
                     // Installation also stops this host: acknowledge the request before
-                    // dispatching the scenario-only shutdown action, just like quit.
+                    // dispatching the opt-in scenario/fixture shutdown action, just like quit.
                     "ui" when action == "management-install-start" =>
                         await OnUiAsync(_ => Task.FromResult(new AppTestResponse(true, _capture())), cancellationToken, TimeSpan.FromSeconds(5)).ConfigureAwait(false),
                     "ui" => await OnUiAsync(async _ =>

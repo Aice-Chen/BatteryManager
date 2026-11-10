@@ -16,6 +16,8 @@ internal sealed class AppManagementController : IAsyncDisposable
     private readonly IReleaseUpdateClient client;
     private readonly StartupService startup;
     private readonly ManagementSimulation? simulation;
+    private readonly bool testMode;
+    private readonly bool localUpdateFixture;
     private readonly Func<UpdatePackage, string, bool, Task> install;
     private readonly Func<string, Task<string?>> importSettings;
     private readonly CancellationTokenSource lifetime = new();
@@ -29,11 +31,14 @@ internal sealed class AppManagementController : IAsyncDisposable
     private Windows.Foundation.IAsyncOperation<Windows.Storage.StorageFolder>? folderSelection;
 
     public AppManagementController(MainWindow window, AppDataPaths paths, bool simulated,
-        Func<UpdatePackage, string, bool, Task> install, Func<string, Task<string?>> importSettings)
+        Func<UpdatePackage, string, bool, Task> install, Func<string, Task<string?>> importSettings,
+        bool testMode = false, LocalUpdateFixture? updateFixture = null, Action<string, int>? recordFixtureResponse = null)
     {
         this.window = window; this.paths = paths; this.install = install; this.importSettings = importSettings;
+        if (updateFixture is not null && (!testMode || simulated)) throw new ArgumentException("A local update fixture requires a real-data test-pipe session.");
+        this.testMode = testMode; localUpdateFixture = updateFixture is not null;
         simulation = simulated ? new() : null;
-        client = simulation is null ? new ReleaseUpdateClient() : simulation;
+        client = simulation is null ? new ReleaseUpdateClient(updateFixture?.CreateHandler(recordFixtureResponse)) : simulation;
         IManagementStore store = simulation is null ? new ManagementStore(paths.ManagementPath) : simulation;
         startup = new(simulation is null ? new WindowsStartupRegistry() : simulation,
             Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "BatteryManager.App.exe"));
@@ -73,7 +78,8 @@ internal sealed class AppManagementController : IAsyncDisposable
         var snapshot = updates.Snapshot;
         if (snapshot.Phase != UpdatePhase.Downloaded || snapshot.SelectedPackage is not { Kind: UpdatePackageKind.Installer } package || snapshot.DownloadedFile is not { } file)
             return;
-        if (confirmedForTest && simulation is null) throw new InvalidOperationException("Confirmation injection requires a fictional scenario.");
+        if (confirmedForTest && simulation is null && !localUpdateFixture)
+            throw new InvalidOperationException("Confirmation injection requires a fictional scenario or an explicit local update fixture.");
         if (!confirmedForTest && !await window.Management.ConfirmInstallAsync(package.Version)) return;
         var current = updates.Snapshot;
         if (!window.CanManageApplication || stopping || current.Phase != UpdatePhase.Downloaded ||
@@ -134,15 +140,32 @@ internal sealed class AppManagementController : IAsyncDisposable
             folderSelection = picker.PickSingleFolderAsync();
             var folder = await folderSelection;
             if (folder is null || stopping || !window.CanManageApplication) return;
-            actionError = await importSettings(folder.Path);
-            if (!stopping) { window.Management.ShowImportResult(actionError is null); Render(); }
+            await ApplyImportAsync(folder.Path);
         }
         catch (OperationCanceledException) when (stopping) { }
         finally { folderSelection = null; importing = false; }
     }
+    private async Task ImportDirectoryForTestAsync(string? directory)
+    {
+        if (!testMode || simulation is not null) throw new InvalidOperationException("Directory import requires a real-data test-pipe session.");
+        if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
+            throw new ArgumentException("Provide the absolute portable settings directory.");
+        if (stopping || importing || !window.CanManageApplication || !paths.IsInstalled) return;
+        if (File.Exists(paths.SettingsPath))
+        { actionError = UiText.Pick("当前安装版已有配置，未覆盖现有设置。", "This installation already has settings. They were not replaced."); Render(); return; }
+        importing = true;
+        try { await ApplyImportAsync(Path.GetFullPath(directory)); }
+        finally { importing = false; }
+    }
+    private async Task ApplyImportAsync(string directory)
+    {
+        actionError = await importSettings(directory);
+        if (!stopping) { window.Management.ShowImportResult(actionError is null); Render(); }
+    }
     public async Task ApplyTestActionAsync(string action, string? value)
     {
-        if (simulation is null) throw new InvalidOperationException("Management test actions require a fictional scenario.");
+        if (action == "management-import-directory") { await ImportDirectoryForTestAsync(value); return; }
+        if (simulation is null && !localUpdateFixture) throw new InvalidOperationException("Management test actions require a fictional scenario or an explicit local update fixture.");
         switch (action)
         {
             case "management-check": await CheckAsync(); break;
@@ -150,9 +173,14 @@ internal sealed class AppManagementController : IAsyncDisposable
             case "management-download-start": _ = DownloadAsync(); break;
             case "management-cancel": await updates.CancelCurrentAsync(); Render(); break;
             case "management-auto": SetResult(await updates.SetAutomaticChecksAsync(value == "on")); Render(); break;
-            case "management-startup": await ChangeStartupAsync(value == "on"); break;
-            case "management-block-startup": simulation.BlockStartup(); RefreshStartup(); break;
+            case "management-startup":
+                if (simulation is null) throw new InvalidOperationException("Startup test changes require a fictional scenario.");
+                await ChangeStartupAsync(value == "on"); break;
+            case "management-block-startup":
+                if (simulation is null) throw new InvalidOperationException("Startup test changes require a fictional scenario.");
+                simulation.BlockStartup(); RefreshStartup(); break;
             case "management-network":
+                if (simulation is null) throw new InvalidOperationException("Synthetic update modes require a fictional scenario.");
                 simulation.Mode = value is "none" or "error" or "available" ? value : throw new ArgumentException("Unknown network fixture."); break;
             case "management-install-start": await InstallAsync(true); break;
             case "management-install-open": _ = InstallAsync(false); break;
