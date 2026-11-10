@@ -90,7 +90,7 @@ function Get-PortableSourceSnapshot([string]$ProjectRoot) {
 # This is the explicit build-input scope; tests, documentation, and ignored build outputs are not source inputs.
 function Test-PortableSourcePath([string]$Path) {
     if (-not $Path.Contains('/')) {
-        return $Path -match '(?i)\.(props|targets|slnx)$' -or $Path -in @('global.json', '.gitattributes', '.editorconfig', 'NuGet.Config')
+        return $Path -match '(?i)\.(props|targets|slnx)$' -or $Path -in @('global.json', '.gitattributes', '.editorconfig', 'NuGet.Config', 'LICENSE')
     }
     return $Path -cmatch '^(src|scripts|packaging)/' -and $Path -notmatch '(?i)(^|/)(bin|obj)/'
 }

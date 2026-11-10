@@ -32,6 +32,9 @@ try {
 $taskSourceAfter = Get-PortableCommittedSourceSnapshot $taskRoot $taskSource.commit
 if ($taskSourceAfter.sha256 -cne $taskSource.sha256 -or $taskSourceAfter.gitSha256 -cne $taskSource.gitSha256 -or $taskSourceAfter.autoCrlf -cne $taskSource.autoCrlf) { throw 'Build inputs changed during publishing; rerun after edits finish. No archive was produced.' }
 $taskFontLicense = Join-Path $taskPayload 'licenses/Barlow-OFL.txt'
+$taskProjectLicense = Join-Path $taskPayload 'LICENSE.txt'
+if (-not (Test-Path -LiteralPath $taskProjectLicense -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $taskProjectLicense).Hash -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'LICENSE')).Hash) { throw 'The project license is missing or differs from its source.' }
 if (-not (Test-Path -LiteralPath $taskFontLicense) -or
     (Get-FileHash -LiteralPath $taskFontLicense).Hash -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'src/BatteryManager.App/Assets/Fonts/OFL.txt')).Hash) { throw 'The bundled font license is missing or differs from its source.' }
 if (@(Get-PortableFiles $taskPayload | Where-Object { [IO.Path]::GetExtension($_) -eq '.ttf' }).Count) { throw 'The tray font must be embedded, not copied as a loose TTF.' }

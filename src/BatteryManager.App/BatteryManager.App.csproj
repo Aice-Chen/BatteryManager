@@ -25,6 +25,7 @@
     <ProjectReference Include="../BatteryManager.WindowsNative/BatteryManager.WindowsNative.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="../../LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Tray number font: Barlow Semi Condensed Medium (SIL Open Font License 1.1). Embedded and loaded for
          this process only; the licence text ships next to the app as licenses\Barlow-OFL.txt. -->
     <EmbeddedResource Include="Assets\Fonts\BarlowSemiCondensed-Medium.ttf" LogicalName="BatteryManager.App.TrayDigits.ttf" />
