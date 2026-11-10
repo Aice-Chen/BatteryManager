@@ -33,9 +33,8 @@ internal sealed class ManagementSimulation : IManagementStore, IStartupRegistry,
         await Task.Delay(50, cancellationToken);
         if (Mode == "error") throw new HttpRequestException("模拟网络不可用");
         if (Mode == "none") return null;
-        var packages = new[] { UpdatePackageKind.Installer, UpdatePackageKind.Portable }.Select(kind =>
-            new UpdatePackage("9.9.9", kind, "BatteryManager-9.9.9-win-x64" + (kind == UpdatePackageKind.Installer ? "-setup.exe" : ".zip"),
-                1024, new string('a', 64), new Uri("https://github.com/Aice-Chen/BatteryManager/releases/download/v9.9.9/fixture"))).ToArray();
+        UpdatePackage[] packages = [new("9.9.9", UpdatePackageKind.Installer, "BatteryManager-9.9.9-win-x64-setup.exe",
+            1024, new string('a', 64), new Uri("https://github.com/Aice-Chen/BatteryManager/releases/download/v9.9.9/fixture"))];
         return new("9.9.9", new("https://github.com/Aice-Chen/BatteryManager/releases/tag/v9.9.9"), packages);
     }
     public async Task<string> DownloadAsync(UpdatePackage package, string cacheDirectory, IProgress<long>? progress = null,

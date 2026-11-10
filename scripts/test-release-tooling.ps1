@@ -16,19 +16,25 @@ function Test-ReleaseCase([string]$Name, [bool]$ShouldAccept, [scriptblock]$Acti
     $taskResults.Add([pscustomobject]@{name=$Name;passed=$accepted -eq $ShouldAccept;accepted=$accepted;error=$failure})
 }
 function New-FixtureAssets([string]$Version='0.2.0') {
-    @([pscustomobject]@{kind='installer';fileName="BatteryManager-$Version-win-x64-setup.exe";sha256=('a'*64);size=[long]123},
-      [pscustomobject]@{kind='portable';fileName="BatteryManager-$Version-win-x64.zip";sha256=('b'*64);size=[long]456})
+    ,@([pscustomobject]@{kind='installer';fileName="BatteryManager-$Version-win-x64-setup.exe";sha256=('a'*64);size=[long]123})
 }
 Test-ReleaseCase 'stable-manifest' $true {
     $manifest = New-ReleaseManifest '0.2.0' (New-FixtureAssets)
-    if ($manifest.assets.Count -ne 2 -or $manifest.version -cne '0.2.0' -or $manifest.schemaVersion -ne 1) { throw 'Manifest content mismatch.' }
+    if ($manifest.assets.Count -ne 1 -or $manifest.assets[0].kind -cne 'installer' -or $manifest.version -cne '0.2.0' -or $manifest.schemaVersion -ne 1) { throw 'Manifest content mismatch.' }
 }
 Test-ReleaseCase 'preview-manifest' $true { New-ReleaseManifest '0.2.0-preview.1' (New-FixtureAssets '0.2.0-preview.1') }
 Test-ReleaseCase 'version-leading-zero' $false { New-ReleaseManifest '00.2.0' (New-FixtureAssets '00.2.0') }
 Test-ReleaseCase 'mismatched-version-name' $false { New-ReleaseManifest '0.3.0' (New-FixtureAssets) }
 Test-ReleaseCase 'test-installer-not-publishable' $false { $a=New-FixtureAssets; $a[0].fileName='BatteryManager-0.2.0-isolation-test-setup.exe'; New-ReleaseManifest '0.2.0' $a }
 Test-ReleaseCase 'path-traversal' $false { $a=New-FixtureAssets; $a[0].fileName='../BatteryManager-0.2.0-win-x64-setup.exe'; New-ReleaseManifest '0.2.0' $a }
-Test-ReleaseCase 'missing-kind' $false { $a=New-FixtureAssets; New-ReleaseManifest '0.2.0' @($a[0]) }
+Test-ReleaseCase 'missing-installer' $false { New-ReleaseManifest '0.2.0' @() }
+Test-ReleaseCase 'portable-only-not-publishable' $false {
+    New-ReleaseManifest '0.2.0' @([pscustomobject]@{kind='portable';fileName='BatteryManager-0.2.0-win-x64.zip';sha256=('b'*64);size=[long]456})
+}
+Test-ReleaseCase 'legacy-dual-package-not-publishable' $false {
+    $a=New-FixtureAssets
+    New-ReleaseManifest '0.2.0' @($a[0],[pscustomobject]@{kind='portable';fileName='BatteryManager-0.2.0-win-x64.zip';sha256=('b'*64);size=[long]456})
+}
 Test-ReleaseCase 'duplicate-kind' $false { $a=New-FixtureAssets; New-ReleaseManifest '0.2.0' @($a[0],$a[0]) }
 Test-ReleaseCase 'unknown-kind' $false { $a=New-FixtureAssets; $a[0].kind='tool'; New-ReleaseManifest '0.2.0' $a }
 Test-ReleaseCase 'short-hash' $false { $a=New-FixtureAssets; $a[0].sha256='abc'; New-ReleaseManifest '0.2.0' $a }

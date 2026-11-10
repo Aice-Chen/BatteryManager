@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace BatteryManager.Application;
 
-/// <summary>Resolves storage without creating directories, importing settings, or probing other installations.</summary>
+/// <summary>Resolves storage without creating directories or probing other installations.</summary>
 internal sealed class AppDataPaths
 {
     private const int MaximumMarkerBytes = 4096;
@@ -41,7 +41,7 @@ internal sealed class AppDataPaths
         return Parse(appDirectory, localAppDataDirectory, marker);
     }
 
-    /// <summary>A missing marker selects portable storage. Invalid installed markers fail explicitly;
+    /// <summary>A missing marker keeps development builds local to their output directory. Invalid installed markers fail explicitly;
     /// silently switching directories would hide the user's existing settings.</summary>
     public static AppDataPaths Parse(string appDirectory, string localAppDataDirectory, string? markerJson)
     {

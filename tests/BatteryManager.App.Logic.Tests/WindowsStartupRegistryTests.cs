@@ -19,9 +19,10 @@ public sealed class WindowsStartupRegistryTests
     [Theory]
     [InlineData(2, (int)StartupApproval.Allowed)]
     [InlineData(3, (int)StartupApproval.Blocked)]
+    [InlineData(0, (int)StartupApproval.Allowed)]
+    [InlineData(1, (int)StartupApproval.Blocked)]
     [InlineData(6, (int)StartupApproval.Unknown)]
     [InlineData(7, (int)StartupApproval.Unknown)]
-    [InlineData(0, (int)StartupApproval.Unknown)]
     public void OnlyKnownApprovalShapesAreInterpreted(byte status, int expected)
     {
         var bytes = new byte[12];
@@ -31,6 +32,27 @@ public sealed class WindowsStartupRegistryTests
         Assert.Equal((StartupApproval)expected, registry.Read().Approval);
         Assert.Empty(backend.Writes);
         Assert.All(backend.Reads, read => Assert.Equal(WindowsStartupRegistry.ValueName, read.Name));
+    }
+
+    [Fact]
+    public void ObservedWindowsToggleRefreshesServiceWithoutChangingApproval()
+    {
+        const string command = "\"D:\\Program\\BatteryManager\\BatteryManager.App.exe\"";
+        var disabled = new byte[] { 1, 0, 0, 0, 192, 228, 48, 129, 43, 113, 221, 1 };
+        var backend = new FakeBackend
+        {
+            Run = new(true, RegistryValueKind.String, command),
+            Approval = new(true, RegistryValueKind.Binary, disabled)
+        };
+        var service = new StartupService(new WindowsStartupRegistry(backend), @"D:\Program\BatteryManager\BatteryManager.App.exe");
+        var before = service.Read();
+        Assert.Equal(StartupStatus.BlockedByWindows, before.Status);
+        Assert.False(service.SetEnabled(true, before).State.IsEnabled);
+        Assert.Equal(disabled, Assert.IsType<byte[]>(backend.Approval.Data));
+        var enabled = new byte[12];
+        backend.Approval = new(true, RegistryValueKind.Binary, enabled);
+        Assert.Equal(StartupStatus.Enabled, service.Read().Status);
+        Assert.Equal(enabled, Assert.IsType<byte[]>(backend.Approval.Data));
     }
 
     [Fact]

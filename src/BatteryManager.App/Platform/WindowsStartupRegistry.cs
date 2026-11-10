@@ -45,7 +45,12 @@ internal sealed class WindowsStartupRegistry(IWindowsStartupRegistryBackend? bac
         // Windows versions or formats remain unknown and are never overwritten.
         if (value.Kind != RegistryValueKind.Binary || value.Data is not byte[] { Length: 12 } bytes ||
             bytes[1] != 0 || bytes[2] != 0 || bytes[3] != 0) return StartupApproval.Unknown;
-        return bytes[0] switch { 2 => StartupApproval.Allowed, 3 => StartupApproval.Blocked, _ => StartupApproval.Unknown };
+        return bytes[0] switch
+        {
+            0 or 2 => StartupApproval.Allowed,
+            1 or 3 => StartupApproval.Blocked,
+            _ => StartupApproval.Unknown
+        };
     }
 }
 

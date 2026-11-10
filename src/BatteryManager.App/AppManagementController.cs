@@ -11,32 +11,27 @@ namespace BatteryManager.App;
 internal sealed class AppManagementController : IAsyncDisposable
 {
     private readonly MainWindow window;
-    private readonly AppDataPaths paths;
     private readonly UpdateCoordinator updates;
     private readonly IReleaseUpdateClient client;
     private readonly StartupService startup;
     private readonly ManagementSimulation? simulation;
-    private readonly bool testMode;
     private readonly bool localUpdateFixture;
     private readonly Func<UpdatePackage, string, bool, Task> install;
-    private readonly Func<string, Task<string?>> importSettings;
     private readonly CancellationTokenSource lifetime = new();
     private StartupState startupState;
     private Task automaticLoop = Task.CompletedTask;
     private string? actionError;
     private bool stopping;
     private Task? stopTask;
-    private bool importing;
     private bool installing;
-    private Windows.Foundation.IAsyncOperation<Windows.Storage.StorageFolder>? folderSelection;
 
     public AppManagementController(MainWindow window, AppDataPaths paths, bool simulated,
-        Func<UpdatePackage, string, bool, Task> install, Func<string, Task<string?>> importSettings,
+        Func<UpdatePackage, string, bool, Task> install,
         bool testMode = false, LocalUpdateFixture? updateFixture = null, Action<string, int>? recordFixtureResponse = null)
     {
-        this.window = window; this.paths = paths; this.install = install; this.importSettings = importSettings;
+        this.window = window; this.install = install;
         if (updateFixture is not null && (!testMode || simulated)) throw new ArgumentException("A local update fixture requires a real-data test-pipe session.");
-        this.testMode = testMode; localUpdateFixture = updateFixture is not null;
+        localUpdateFixture = updateFixture is not null;
         simulation = simulated ? new() : null;
         client = simulation is null ? new ReleaseUpdateClient(updateFixture?.CreateHandler(recordFixtureResponse)) : simulation;
         IManagementStore store = simulation is null ? new ManagementStore(paths.ManagementPath) : simulation;
@@ -51,10 +46,7 @@ internal sealed class AppManagementController : IAsyncDisposable
         window.Management.Download = DownloadAsync;
         window.Management.Cancel = updates.CancelCurrentAsync;
         window.Management.Install = () => InstallAsync(false);
-        window.Management.OpenFolder = OpenDownloadFolder;
         window.Management.OpenSystemStartup = OpenSystemStartup;
-        window.Management.Import = ImportAsync;
-        window.Management.EnableImport(paths.IsInstalled);
         Render();
     }
     public void Start() { if (simulation is null) automaticLoop = AutomaticChecksAsync(); }
@@ -63,7 +55,7 @@ internal sealed class AppManagementController : IAsyncDisposable
     private async Task DownloadAsync()
     {
         if (!window.CanManageApplication || stopping) return;
-        SetResult(await updates.DownloadAsync(paths.IsInstalled || simulation is not null ? UpdatePackageKind.Installer : UpdatePackageKind.Portable));
+        SetResult(await updates.DownloadAsync(UpdatePackageKind.Installer));
         Render();
     }
     private Task ChangeStartupAsync(bool enabled)
@@ -113,58 +105,13 @@ internal sealed class AppManagementController : IAsyncDisposable
     }
     private void Render() { if (!stopping) window.Management.Apply(updates.Snapshot, startupState, simulation is not null, actionError); }
     private void SetResult(UpdateOperationResult result) => actionError = result.Error;
-    private void OpenDownloadFolder()
-    {
-        if (simulation is not null || stopping) return;
-        var snapshot = updates.Snapshot;
-        if (snapshot.Phase != UpdatePhase.Downloaded || snapshot.DownloadedFile is null) return;
-        var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
-        start.ArgumentList.Add(Path.GetDirectoryName(snapshot.DownloadedFile)!); Process.Start(start)?.Dispose();
-    }
     private void OpenSystemStartup()
     {
         if (simulation is null && !stopping)
             Process.Start(new ProcessStartInfo("ms-settings:startupapps") { UseShellExecute = true })?.Dispose();
     }
-    private async Task ImportAsync()
-    {
-        if (stopping || importing || simulation is not null || !window.CanManageApplication || !paths.IsInstalled) return;
-        if (File.Exists(paths.SettingsPath))
-        { actionError = UiText.Pick("当前安装版已有配置，未覆盖现有设置。", "This installation already has settings. They were not replaced."); Render(); return; }
-        importing = true;
-        try
-        {
-            var picker = new Windows.Storage.Pickers.FolderPicker();
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
-            picker.FileTypeFilter.Add("*");
-            folderSelection = picker.PickSingleFolderAsync();
-            var folder = await folderSelection;
-            if (folder is null || stopping || !window.CanManageApplication) return;
-            await ApplyImportAsync(folder.Path);
-        }
-        catch (OperationCanceledException) when (stopping) { }
-        finally { folderSelection = null; importing = false; }
-    }
-    private async Task ImportDirectoryForTestAsync(string? directory)
-    {
-        if (!testMode || simulation is not null) throw new InvalidOperationException("Directory import requires a real-data test-pipe session.");
-        if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
-            throw new ArgumentException("Provide the absolute portable settings directory.");
-        if (stopping || importing || !window.CanManageApplication || !paths.IsInstalled) return;
-        if (File.Exists(paths.SettingsPath))
-        { actionError = UiText.Pick("当前安装版已有配置，未覆盖现有设置。", "This installation already has settings. They were not replaced."); Render(); return; }
-        importing = true;
-        try { await ApplyImportAsync(Path.GetFullPath(directory)); }
-        finally { importing = false; }
-    }
-    private async Task ApplyImportAsync(string directory)
-    {
-        actionError = await importSettings(directory);
-        if (!stopping) { window.Management.ShowImportResult(actionError is null); Render(); }
-    }
     public async Task ApplyTestActionAsync(string action, string? value)
     {
-        if (action == "management-import-directory") { await ImportDirectoryForTestAsync(value); return; }
         if (simulation is null && !localUpdateFixture) throw new InvalidOperationException("Management test actions require a fictional scenario or an explicit local update fixture.");
         switch (action)
         {
@@ -192,7 +139,6 @@ internal sealed class AppManagementController : IAsyncDisposable
     private async Task StopCoreAsync()
     {
         stopping = true; updates.Changed -= UpdateChanged; window.Management.Stop();
-        folderSelection?.Cancel();
         await lifetime.CancelAsync();
         await updates.CancelAndDrainAsync(); await automaticLoop;
         (client as IDisposable)?.Dispose(); lifetime.Dispose();

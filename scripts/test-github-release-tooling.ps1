@@ -61,8 +61,8 @@ function New-PublishFixture([string]$Version='0.2.0',[string]$SourceCase='valid'
         Write-PortableText ($item.path+'.sha256') ($hash+'  '+[IO.Path]::GetFileName($item.path)+"`n")
         [pscustomobject]@{kind=$item.kind;fileName=[IO.Path]::GetFileName($item.path);sha256=$hash;size=[long](Get-Item -LiteralPath $item.path).Length}
     }
-    Write-PublishJson (Join-Path $directory 'update-manifest.json') (New-ReleaseManifest $Version @($assets))
-    Write-PortableText (Join-Path $directory 'release-notes.md') "Fixture release notes.`n"
+    Write-PublishJson (Join-Path $directory 'update-manifest.json') (New-ReleaseManifest $Version @($assets[0]))
+    Write-PortableText (Join-Path $directory 'RELEASE_NOTES.md') "Fixture release notes.`n"
     $sourceHashes=Get-PortableSourceHashes $taskSource.manifest
     Write-PublishJson (Join-Path $directory 'installer-build.json') @{schemaVersion=1;version=$Version;testOnly=$false;installerSha256=$assets[0].sha256;portableSha256=$assets[1].sha256;payloadSourceFingerprint=$fingerprint;installerPath='private local build path';portablePackagePath='private local package path';installerScriptSha256=$sourceHashes['packaging/windows/BatteryManager.iss'];installedMarkerSha256=$sourceHashes['packaging/windows/installed.json']}
     Write-PublishJson (Join-Path $directory 'delivery.json') @{schemaVersion=1;version=$Version;tag=('v'+$Version);repository='Aice-Chen/BatteryManager';prerelease=$Version.Contains('-');sourceFingerprint=$fingerprint;directory=$directory;uploaded=$false}
@@ -75,15 +75,25 @@ foreach($version in @('0.2.0','0.2.0-preview.2')){
         $directory=New-PublishFixture $version
         Write-PortableText (Join-Path $directory 'private-settings.json') 'Never upload this local extra file.'
         $plan=Get-PublishPlan $directory
-        if(-not $plan.draft -or $plan.created -or $plan.published -or $plan.networkAccessed -or $plan.assets.Count -ne 6 -or -not $plan.sourceCommitBindingVerified){throw 'Unexpected plan execution, unverified commit or asset count.'}
+        if(-not $plan.draft -or $plan.created -or $plan.published -or $plan.networkAccessed -or $plan.assets.Count -ne 4 -or -not $plan.sourceCommitBindingVerified){throw 'Unexpected plan execution, unverified commit or asset count.'}
         $names=@($plan.assets|ForEach-Object name)
-        if(@($names|Where-Object {$_ -in @('delivery.json','installer-build.json','private-settings.json')}).Count){throw 'Private metadata entered the upload whitelist.'}
+        $expected=@("BatteryManager-$version-win-x64-setup.exe","BatteryManager-$version-win-x64-setup.exe.sha256",'update-manifest.json','RELEASE_NOTES.md')
+        if(@($names|Where-Object {$_ -cnotin $expected}).Count -or @($plan.createArguments|Where-Object {$_ -like '*.zip' -or $_ -like '*.zip.sha256'}).Count){throw 'Private payload or metadata entered the upload whitelist.'}
         if($plan.prerelease -ne $version.Contains('-') -or ('--prerelease' -in $plan.createArguments) -ne $plan.prerelease){throw 'Preview channel is inconsistent.'}
         if('--draft' -notin $plan.createArguments -or '--clobber' -in $plan.createArguments -or '--notes-file' -notin $plan.createArguments){throw 'Draft/no-clobber/notes-file arguments are wrong.'}
         foreach($asset in $plan.assets){if(($asset.sha256 -cne (Get-FileHash -LiteralPath $asset.path).Hash.ToLowerInvariant()) -or $asset.size -ne (Get-Item -LiteralPath $asset.path).Length){throw 'An asset was not fingerprinted.'}}
     }
 }
-foreach($case in @('wrong-repository','wrong-tag','wrong-channel','already-uploaded','wrong-directory','wrong-source','manifest-version','manifest-extra','manifest-size','manifest-hash','manifest-traversal','duplicate-json','test-installer','build-hash','installer-source-hash','installed-marker-hash','missing-installer-source-hash','changed-package','changed-sidecar','empty-notes')){
+Test-PublishCase 'prepare-delivery-keeps-private-payload' $true {
+    $sourceDirectory=New-PublishFixture
+    $prepared=& (Join-Path $PSScriptRoot 'prepare-release.ps1') -PortablePackagePath (Join-Path $sourceDirectory 'BatteryManager-0.2.0-win-x64.zip') -InstallerPath (Join-Path $sourceDirectory 'BatteryManager-0.2.0-win-x64-setup.exe') -ReleaseNotesPath (Join-Path $sourceDirectory 'RELEASE_NOTES.md') -OutputDirectory (Join-Path $taskRepository '.artifacts/prepared')
+    $manifest=Get-Content -LiteralPath (Join-Path $prepared.directory 'update-manifest.json') -Raw|ConvertFrom-Json
+    if(@($manifest.assets).Count -ne 1 -or $manifest.assets[0].kind -cne 'installer'){throw 'Preparation exposed a non-installer download.'}
+    if(-not (Test-Path -LiteralPath (Join-Path $prepared.directory 'BatteryManager-0.2.0-win-x64.zip'))){throw 'Preparation discarded the private source-bound installer payload.'}
+    $plan=Get-PublishPlan $prepared.directory
+    if($plan.assets.Count -ne 4 -or -not $plan.sourceCommitBindingVerified){throw 'Prepared delivery lost upload limits or source binding.'}
+}
+foreach($case in @('wrong-repository','wrong-tag','wrong-channel','already-uploaded','wrong-directory','wrong-source','manifest-version','manifest-extra','manifest-size','manifest-hash','manifest-traversal','legacy-dual-manifest','portable-only-manifest','missing-installer','duplicate-json','test-installer','build-hash','installer-source-hash','installed-marker-hash','missing-installer-source-hash','changed-package','changed-sidecar','empty-notes')){
     Test-PublishCase ('reject:'+ $case) $false {
         $directory=New-PublishFixture
         $deliveryPath=Join-Path $directory 'delivery.json';$delivery=Get-Content -LiteralPath $deliveryPath -Raw|ConvertFrom-Json
@@ -101,6 +111,9 @@ foreach($case in @('wrong-repository','wrong-tag','wrong-channel','already-uploa
             'manifest-size'{$manifest.assets[0].size++;Write-PublishJson $manifestPath $manifest}
             'manifest-hash'{$manifest.assets[0].sha256='b'*64;Write-PublishJson $manifestPath $manifest}
             'manifest-traversal'{$manifest.assets[0].fileName='../other.exe';Write-PublishJson $manifestPath $manifest}
+            'legacy-dual-manifest'{$manifest.assets+=@{kind='portable';fileName='BatteryManager-0.2.0-win-x64.zip';sha256=$build.portableSha256;size=[long](Get-Item -LiteralPath (Join-Path $directory 'BatteryManager-0.2.0-win-x64.zip')).Length};Write-PublishJson $manifestPath $manifest}
+            'portable-only-manifest'{$manifest.assets=@(@{kind='portable';fileName='BatteryManager-0.2.0-win-x64.zip';sha256=$build.portableSha256;size=[long](Get-Item -LiteralPath (Join-Path $directory 'BatteryManager-0.2.0-win-x64.zip')).Length});Write-PublishJson $manifestPath $manifest}
+            'missing-installer'{$manifest.assets=@();Write-PublishJson $manifestPath $manifest}
             'duplicate-json'{Write-PortableText $manifestPath '{"schemaVersion":1,"schemaVersion":1,"version":"0.2.0","assets":[]}'}
             'test-installer'{$build.testOnly=$true;Write-PublishJson $buildPath $build}
             'build-hash'{$build.installerSha256='b'*64;Write-PublishJson $buildPath $build}
@@ -109,7 +122,7 @@ foreach($case in @('wrong-repository','wrong-tag','wrong-channel','already-uploa
             'missing-installer-source-hash'{$build.PSObject.Properties.Remove('installerScriptSha256');Write-PublishJson $buildPath $build}
             'changed-package'{Write-PortableText (Join-Path $directory 'BatteryManager-0.2.0-win-x64-setup.exe') 'changed bytes'}
             'changed-sidecar'{Write-PortableText (Join-Path $directory 'BatteryManager-0.2.0-win-x64.zip.sha256') 'wrong checksum'}
-            'empty-notes'{Write-PortableText (Join-Path $directory 'release-notes.md') ''}
+            'empty-notes'{Write-PortableText (Join-Path $directory 'RELEASE_NOTES.md') ''}
         }
         Get-PublishPlan $directory
     }
@@ -153,6 +166,10 @@ if($command[0] -eq 'release' -and $command[1] -eq 'create'){
     $blocked=$false
     try{[IO.File]::WriteAllText($installer.path,'tampering during upload')}catch [IO.IOException]{$blocked=$true}
     if(-not $blocked){throw 'Upload inputs were not locked.'}
+    $payload=Join-Path ([IO.Path]::GetDirectoryName($installer.path)) ('BatteryManager-'+$state.version+'-win-x64.zip')
+    $blocked=$false
+    try{[IO.File]::WriteAllText($payload,'tampering with private payload during upload')}catch [IO.IOException]{$blocked=$true}
+    if(-not $blocked){throw 'Private source-binding payload was not locked.'}
     'https://github.com/Aice-Chen/BatteryManager/releases/tag/'+$state.tag;return
 }
 if($command[0] -eq 'release' -and $command[1] -eq 'view'){
@@ -167,7 +184,7 @@ foreach($mode in @('success','success-preview','wrong-remote','missing-commit','
         $version=if($mode -eq 'success-preview'){'0.2.0-preview.2'}else{'0.2.0'}
         $directory=New-PublishFixture $version
         $plan=Get-PublishPlan $directory
-        Write-PublishJson (Join-Path $taskFakeDirectory 'state.json') @{mode=$mode;tag=$plan.tag;commit=$taskCommit;prerelease=$plan.prerelease;assets=$plan.assets}
+        Write-PublishJson (Join-Path $taskFakeDirectory 'state.json') @{mode=$mode;version=$version;tag=$plan.tag;commit=$taskCommit;prerelease=$plan.prerelease;assets=$plan.assets}
         Write-PortableText (Join-Path $taskFakeDirectory 'calls.jsonl') ''
         $result=& $taskScript -DeliveryDirectory $directory -TargetCommit $taskCommit -GhCommand $taskFake
         if(-not $result.created -or -not $result.draft -or $result.published){throw 'Unexpected draft result.'}

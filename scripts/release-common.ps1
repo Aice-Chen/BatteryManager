@@ -9,14 +9,14 @@ function New-ReleaseManifest([string]$Version, [object[]]$Assets) {
     if (-not (Test-PortableVersion $Version)) { throw 'Invalid release version.' }
     $kinds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $items = foreach ($asset in $Assets) {
-        if ($asset.kind -cnotin @('installer', 'portable') -or -not $kinds.Add($asset.kind)) { throw 'Duplicate or unknown release asset kind.' }
+        if ($asset.kind -cne 'installer' -or -not $kinds.Add($asset.kind)) { throw 'A release can contain only one installer asset.' }
         Assert-ReleaseAssetName $asset.fileName $Version $asset.kind
         if ($asset.sha256 -cnotmatch '\A[0-9a-f]{64}\z' -or $asset.size -isnot [long] -or $asset.size -le 0 -or $asset.size -gt 1GB) {
             throw 'Invalid release asset size or SHA256.'
         }
         [ordered]@{ kind = $asset.kind; fileName = $asset.fileName; sha256 = $asset.sha256; size = $asset.size }
     }
-    if ($kinds.Count -ne 2) { throw 'A release needs one portable package and one installer.' }
+    if ($kinds.Count -ne 1) { throw 'A release needs exactly one installer.' }
     [ordered]@{ schemaVersion = 1; version = $Version; assets = @($items) }
 }
 

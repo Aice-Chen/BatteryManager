@@ -24,9 +24,7 @@ internal sealed class ManagementPanel : StackPanel
     private readonly Button _check = new() { Content = UiText.Pick("检查更新", "Check for updates") };
     private readonly Button _download = new() { Content = UiText.Pick("下载新版", "Download update") };
     private readonly Button _install = new() { Content = UiText.Pick("安装更新…", "Install update…") };
-    private readonly Button _openFolder = new() { Content = UiText.Pick("查看下载文件", "Show downloaded file") };
     private readonly Button _cancel = new() { Content = UiText.Pick("取消", "Cancel") };
-    private readonly Button _import = new() { Content = UiText.Pick("导入便携版配置…", "Import portable settings…") };
     private readonly Button _removeStartup = new() { Content = UiText.Pick("移除启动项", "Remove startup entry") };
     private readonly HyperlinkButton _systemStartup = new() { Content = UiText.Pick("Windows 启动设置", "Windows startup settings") };
     private readonly List<Border> _cards = [];
@@ -48,10 +46,8 @@ internal sealed class ManagementPanel : StackPanel
     public Func<Task>? Check { get; set; }
     public Func<Task>? Download { get; set; }
     public Func<Task>? Install { get; set; }
-    public Action? OpenFolder { get; set; }
     public Action? OpenSystemStartup { get; set; }
     public Func<Task>? Cancel { get; set; }
-    public Func<Task>? Import { get; set; }
 
     public ManagementPanel()
     {
@@ -70,12 +66,9 @@ internal sealed class ManagementPanel : StackPanel
         var body = new StackPanel { Spacing = 8 };
         body.Children.Add(_status); body.Children.Add(_lastCheck);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        foreach (var button in new[] { _download, _install, _openFolder, _cancel }) buttons.Children.Add(button);
+        foreach (var button in new[] { _download, _install, _cancel }) buttons.Children.Add(button);
         body.Children.Add(buttons); body.Children.Add(_error);
         Children.Add(Card(UiText.Pick("软件更新", "Software updates"), _check, body));
-        _import.HorizontalAlignment = HorizontalAlignment.Left;
-        _import.Visibility = Visibility.Collapsed; Children.Add(_import);
-        _import.Click += async (_, _) => await InvokeAsync(Import);
         _startup.Toggled += async (_, _) =>
         {
             if (_rendering || _stopped || _changingStartup) return;
@@ -95,7 +88,6 @@ internal sealed class ManagementPanel : StackPanel
         _install.Click += async (_, _) => await InvokeAsync(Install);
         _cancel.Click += async (_, _) => await InvokeAsync(Cancel);
         _removeStartup.Click += async (_, _) => await InvokeAsync(() => ChangeStartup?.Invoke(false));
-        _openFolder.Click += (_, _) => InvokeAction(OpenFolder);
         _systemStartup.Click += (_, _) => InvokeAction(OpenSystemStartup);
         Render();
     }
@@ -118,11 +110,6 @@ internal sealed class ManagementPanel : StackPanel
         Render();
     }
     public void SetPreparingInstallation(bool value) { _preparingInstallation = value; Render(); }
-    public void EnableImport(bool installed) => _import.Visibility = installed ? Visibility.Visible : Visibility.Collapsed;
-    public void ShowImportResult(bool success)
-    {
-        if (success) _import.Content = UiText.Pick("配置已导入", "Settings imported");
-    }
     public void HideConfirmation() => _confirmation?.Hide();
     public async Task<bool> ConfirmInstallAsync(string version)
     {
@@ -184,9 +171,7 @@ internal sealed class ManagementPanel : StackPanel
                 UpdatePhase.UpToDate => UiText.Pick("没有可用的新版正式发布。", "No newer stable release is available."),
                 UpdatePhase.Available => UiText.Pick($"发现新版本 {update.Available?.Version}", $"Version {update.Available?.Version} is available"),
                 UpdatePhase.Downloading => UiText.Pick($"正在下载：{update.DownloadedBytes / 1048576d:F1} MB", $"Downloading: {update.DownloadedBytes / 1048576d:F1} MB"),
-                UpdatePhase.Downloaded => update.SelectedPackage?.Kind == UpdatePackageKind.Installer
-                    ? UiText.Pick("下载已校验，可以安装。", "Download verified. Ready to install.")
-                    : UiText.Pick("便携包已校验。请退出程序后解压，并保留原来的配置文件。", "Portable archive verified. Exit before extracting and keep your existing settings."),
+                UpdatePhase.Downloaded => UiText.Pick("下载已校验，可以安装。", "Download verified. Ready to install."),
                 UpdatePhase.Canceled => UiText.Pick("已取消。", "Canceled."),
                 UpdatePhase.Cancelling => UiText.Pick("正在取消…", "Canceling…"),
                 UpdatePhase.Failed => UiText.Pick("更新操作未完成，可以重试。", "The update operation did not finish. You can retry."),
@@ -202,10 +187,7 @@ internal sealed class ManagementPanel : StackPanel
             _download.IsEnabled = !_stopped;
             _install.Visibility = downloaded && update?.SelectedPackage?.Kind == UpdatePackageKind.Installer ? Visibility.Visible : Visibility.Collapsed;
             _install.IsEnabled = !_stopped && !_preparingInstallation;
-            _openFolder.Visibility = downloaded && update?.SelectedPackage?.Kind == UpdatePackageKind.Portable ? Visibility.Visible : Visibility.Collapsed;
-            _openFolder.IsEnabled = !_stopped;
             _cancel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed; _cancel.IsEnabled = !_stopped;
-            _import.IsEnabled = !_stopped && !busy;
             _error.Text = string.Join(Environment.NewLine, new[] { _actionError, update?.Error, update?.SettingsError }.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct());
             _error.Visibility = _error.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         }

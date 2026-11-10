@@ -169,7 +169,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         _window.UndoMergeRequested = UndoDeviceLinkAsync;
         _management = new AppManagementController(_window,
             _dataPaths ?? AppDataPaths.Parse(AppContext.BaseDirectory, AppContext.BaseDirectory, null),
-            _scenarios is not null, RequestInstallationAsync, ImportPortableSettingsAsync, testPipe is not null, _updateFixture,
+            _scenarios is not null, RequestInstallationAsync, testPipe is not null, _updateFixture,
             (url, status) => _diagnostics?.Record("update-fixture-response", new { url, status, networkAccessed = false }));
         _window.ManagementOpened = _management.RefreshStartup;
         _window.Activated += (_, _) => { if (_window.CanManageApplication) _management?.RefreshStartup(); };
@@ -411,34 +411,11 @@ public partial class App : Microsoft.UI.Xaml.Application
     }
 
     private Task QuitAsync() => QuitCoreAsync(null, false);
-    private Task<string?> ImportPortableSettingsAsync(string directory)
-    {
-        if (_quitting || _preparingInstallation || _scenarios is not null || _dataPaths?.IsInstalled != true || _preferencesStore is null)
-            return Task.FromResult<string?>("当前无法导入配置。");
-        if (_savePreferences is { IsCompleted: false } || _window!.TrayPriority.CaptureDraft() is { IsSaving: true } or { IsDragging: true })
-            return Task.FromResult<string?>("请等待当前设置保存完成后重试。");
-        // Import shares the existing settings transaction barrier and shutdown drain.
-        return _savePreferences = ImportPortableSettingsCoreAsync(directory);
-    }
-    private async Task<string?> ImportPortableSettingsCoreAsync(string directory)
-    {
-        var result = await SettingsImporter.ImportAsync(directory, _dataPaths!);
-        if (!result.Success) return result.Error;
-        if (_quitting) return null; // The committed file is loaded on the next launch.
-        var loaded = _preferencesStore!.Load();
-        if (!loaded.Success) return loaded.Error;
-        _settings = loaded.Preferences ?? AppPreferences.Default; _priorities = loaded.Priorities; _preferencesWarning = loaded.Error;
-        _session!.SetDeviceLinks(_settings.DeviceLinks);
-        _window!.TrayPriority.Initialize(_priorities, _preferencesWarning, SaveTrayPreferencesAsync);
-        _themes!.MainMode = _settings.MainColorMode;
-        ApplyThemes(); RenderPresentation(_session.Snapshot);
-        return null;
-    }
     private async Task RequestInstallationAsync(UpdatePackage package, string file, bool simulated)
     {
         if (_quitting || _preparingInstallation) return;
         if (simulated && _scenarios is null) throw new InvalidOperationException("Simulated installation requires a scenario.");
-        if (!simulated && _dataPaths?.IsInstalled != true) throw new InvalidOperationException("便携版请使用下载的 ZIP 更新。");
+        if (!simulated && _dataPaths?.IsInstalled != true) throw new InvalidOperationException("开发运行目录不支持安装更新，请从安装版操作。");
         _preparingInstallation = true;
         _window!.SetInstallationPreparing(true);
         try

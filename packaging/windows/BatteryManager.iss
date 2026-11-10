@@ -252,8 +252,8 @@ begin
   if not RegQueryBinaryValue(HKCU, ApprovalKey, RunValueName, Data) then Exit;
   if Length(Data) <> 12 then Exit;
   if (Ord(Data[2]) <> 0) or (Ord(Data[3]) <> 0) or (Ord(Data[4]) <> 0) then Exit;
-  if Ord(Data[1]) = 2 then Result := 1
-  else if Ord(Data[1]) = 3 then Result := 2;
+  if (Ord(Data[1]) = 0) or (Ord(Data[1]) = 2) then Result := 1
+  else if (Ord(Data[1]) = 1) or (Ord(Data[1]) = 3) then Result := 2;
 end;
 
 function StartupTaskDescription(Param: String): String;
@@ -262,6 +262,7 @@ var
 begin
   Result := CustomMessage('StartupTask');
   Approval := StartupApproval;
+  Log('Startup permission classification: ' + IntToStr(Approval));
   if Approval = 2 then Result := Result + CustomMessage('StartupBlockedSuffix')
   else if Approval = 3 then Result := Result + CustomMessage('StartupUnknownSuffix');
 end;

@@ -53,14 +53,14 @@ $taskDeliveryPath = Resolve-PortableProjectPath (Join-Path $taskDirectory 'deliv
 $taskInitial = Read-PublicationMetadata $taskDeliveryPath
 if (-not (Test-PortableVersion $taskInitial.version)) { throw 'The delivery version is invalid.' }
 $taskVersion = [string]$taskInitial.version
-$taskNames = @("BatteryManager-$taskVersion-win-x64-setup.exe", "BatteryManager-$taskVersion-win-x64.zip",
-    "BatteryManager-$taskVersion-win-x64-setup.exe.sha256", "BatteryManager-$taskVersion-win-x64.zip.sha256",
-    'update-manifest.json', 'release-notes.md')
+$taskNames = @("BatteryManager-$taskVersion-win-x64-setup.exe", "BatteryManager-$taskVersion-win-x64-setup.exe.sha256",
+    'update-manifest.json', 'RELEASE_NOTES.md')
+$taskPayloadNames = @("BatteryManager-$taskVersion-win-x64.zip", "BatteryManager-$taskVersion-win-x64.zip.sha256")
 $taskLeases = [Collections.Generic.List[IO.FileStream]]::new()
 try {
     # Lock every reviewed input while hashing and, when requested, while gh reads the assets.
-    # Local build/delivery records are read here, but are never added to the upload argument list.
-    foreach ($name in @($taskNames) + @('delivery.json', 'installer-build.json')) {
+    # The source-bound ZIP and local build records remain private validation inputs.
+    foreach ($name in @($taskNames) + $taskPayloadNames + @('delivery.json', 'installer-build.json')) {
         $path = Resolve-PortableProjectPath (Join-Path $taskDirectory $name) $taskRoot -ArtifactsOnly
         if ($path.Contains('#')) { throw 'A release path cannot contain the GitHub asset-label separator #.' }
         $taskLeases.Add([IO.FileStream]::new($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read))
@@ -87,9 +87,12 @@ try {
             throw 'A release asset differs from its update manifest.'
         }
     }
-    $taskPortable = & (Join-Path $PSScriptRoot 'test-portable-package.ps1') -PackagePath (Join-Path $taskDirectory "BatteryManager-$taskVersion-win-x64.zip") -TargetCommit $taskCommit
-    if (-not $taskPortable.passed -or $taskPortable.version -cne $taskVersion -or $taskPortable.sourceFingerprint -cne $taskDelivery.sourceFingerprint) {
-        throw 'Portable payload and delivery provenance differ.'
+    $taskPayloadPath = Join-Path $taskDirectory "BatteryManager-$taskVersion-win-x64.zip"
+    $taskPayloadHash = Assert-ReleaseSidecar $taskPayloadPath
+    $taskPortable = & (Join-Path $PSScriptRoot 'test-portable-package.ps1') -PackagePath $taskPayloadPath -TargetCommit $taskCommit
+    if (-not $taskPortable.passed -or $taskPortable.version -cne $taskVersion -or $taskPortable.sourceFingerprint -cne $taskDelivery.sourceFingerprint -or
+        $taskPayloadHash -cne $taskPortable.archiveSha256) {
+        throw 'Installer payload and delivery provenance differ.'
     }
     $taskBuild = Read-PublicationMetadata (Join-Path $taskDirectory 'installer-build.json')
     Assert-PublicationSchema $taskBuild.schemaVersion
@@ -104,13 +107,13 @@ try {
     $taskAssets = foreach ($name in $taskNames) {
         $path = Join-Path $taskDirectory $name
         $length = [long](Get-Item -LiteralPath $path).Length
-        if ($length -le 0 -or (($name -in @('update-manifest.json','release-notes.md') -or $name.EndsWith('.sha256')) -and $length -gt 1MB)) {
+        if ($length -le 0 -or (($name -in @('update-manifest.json','RELEASE_NOTES.md') -or $name.EndsWith('.sha256')) -and $length -gt 1MB)) {
             throw 'An upload asset is empty or oversized.'
         }
         [pscustomobject]@{name=$name;path=$path;size=$length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
     }
     $taskCreate = @('release','create',$taskDelivery.tag,'--repo',$taskRemote,'--target',$taskCommit,
-        '--title',('Battery Manager '+$taskVersion),'--notes-file',(Join-Path $taskDirectory 'release-notes.md'),'--draft','--latest=false')
+        '--title',('Battery Manager '+$taskVersion),'--notes-file',(Join-Path $taskDirectory 'RELEASE_NOTES.md'),'--draft','--latest=false')
     if ($taskDelivery.prerelease) { $taskCreate += '--prerelease' }
     $taskCreate += @($taskAssets | ForEach-Object path)
     $taskPlan = [ordered]@{

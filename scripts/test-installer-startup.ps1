@@ -95,7 +95,7 @@ function Invoke-TestProcess([string]$Exe, [string[]]$Arguments) {
         if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)." }
     } finally { $process.Dispose() }
 }
-function Test-StartupCase([string]$Name, [string[]]$TaskArguments, [string]$Expected) {
+function Test-StartupCase([string]$Name, [string[]]$TaskArguments, [string]$Expected, [int]$ExpectedApproval = -1) {
     if ($plan.installerSha256 -cne (Get-FileHash -LiteralPath $plan.installer).Hash.ToLowerInvariant()) { throw 'The reviewed installer changed.' }
     $approvalBefore = Get-RegistryValueSnapshot $taskApprovalKey | ConvertTo-Json -Compress
     $log = Join-Path $taskEvidence ($Name+'.log')
@@ -104,6 +104,9 @@ function Test-StartupCase([string]$Name, [string[]]$TaskArguments, [string]$Expe
     $approvalAfter = Get-RegistryValueSnapshot $taskApprovalKey | ConvertTo-Json -Compress
     $passed = if ($Expected) { $null -ne $run -and $run.kind -eq 'String' -and $run.value -ceq $Expected } else { $null -eq $run }
     $passed = $passed -and $approvalBefore -ceq $approvalAfter
+    if ($ExpectedApproval -ge 0) {
+        $passed = $passed -and (Get-Content -LiteralPath $log -Raw).Contains('Startup permission classification: '+$ExpectedApproval)
+    }
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Uninstall\BatteryManager.Isolation.'+$plan.id+'_is1')
     if ($null -ne $key) { $key.Dispose(); throw 'The test installer wrote an uninstall registration.' }
     $taskResults.Add([pscustomobject]@{name=$Name;passed=$passed;run=$run;approvalUnchanged=$approvalBefore -ceq $approvalAfter;log=$log})
@@ -124,10 +127,17 @@ try {
     Set-TestRun $taskExpectedCommand
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($taskApprovalKey)
     try { $key.SetValue('BatteryManager',[byte[]]@(3,0,0,0,1,2,3,4,5,6,7,8),[Microsoft.Win32.RegistryValueKind]::Binary) } finally { $key.Dispose() }
-    Test-StartupCase '07-windows-blocked-preserved' @() $taskExpectedCommand
+    Test-StartupCase '07-windows-blocked-preserved' @() $taskExpectedCommand 2
     $unknown = '"C:\Windows\System32\notepad.exe"'
     Set-TestRun $unknown
     Test-StartupCase '08-unknown-run-preserved' @('/TASKS=startup') $unknown
+    Set-TestRun $taskExpectedCommand
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($taskApprovalKey)
+    try { $key.SetValue('BatteryManager',[byte[]]@(1,0,0,0,192,228,48,129,43,113,221,1),[Microsoft.Win32.RegistryValueKind]::Binary) } finally { $key.Dispose() }
+    Test-StartupCase '09-observed-windows-blocked-preserved' @() $taskExpectedCommand 2
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($taskApprovalKey)
+    try { $key.SetValue('BatteryManager',[byte[]]::new(12),[Microsoft.Win32.RegistryValueKind]::Binary) } finally { $key.Dispose() }
+    Test-StartupCase '10-observed-windows-enabled-preserved' @() $taskExpectedCommand 1
     $uninstaller = @(Get-ChildItem -LiteralPath $plan.target -Filter 'unins*.exe')
     if ($uninstaller.Count -ne 1) { throw 'Expected one isolated uninstaller.' }
     Invoke-TestProcess $uninstaller[0].FullName ($taskBaseArgs + @('/LOG="'+(Join-Path $taskEvidence 'uninstall.log')+'"'))

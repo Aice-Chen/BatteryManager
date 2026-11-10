@@ -30,18 +30,21 @@ if ($taskInstallerInfo.version -cne $taskVersion -or $taskInstallerInfo.portable
 $taskAssets = @()
 foreach ($item in @(@{kind='installer';path=$taskInstallerPath}, @{kind='portable';path=$taskPortablePath})) {
     $taskHash = Assert-ReleaseSidecar $item.path
-    $taskAssets += [pscustomobject]@{kind=$item.kind;fileName=[IO.Path]::GetFileName($item.path);sha256=$taskHash;size=[long](Get-Item -LiteralPath $item.path).Length}
+    if ($item.kind -eq 'installer') {
+        $taskAssets += [pscustomobject]@{kind=$item.kind;fileName=[IO.Path]::GetFileName($item.path);sha256=$taskHash;size=[long](Get-Item -LiteralPath $item.path).Length}
+    }
     if ($item.kind -eq 'installer' -and $taskInstallerInfo.installerSha256 -cne $taskHash) { throw 'Installer differs from its build record.' }
 }
 $taskManifest = New-ReleaseManifest $taskVersion $taskAssets
 if (-not (Test-Path -LiteralPath $taskNotesPath -PathType Leaf)) { throw 'Release notes are required.' }
 $taskOutput = Join-Path $taskBase ($taskVersion + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $taskOutput
+# Keep the ZIP as private installer-build evidence, not a published download.
 foreach ($path in @($taskPortablePath, $taskInstallerPath)) {
     Copy-Item -LiteralPath $path -Destination $taskOutput
     Copy-Item -LiteralPath ($path + '.sha256') -Destination $taskOutput
 }
-Copy-Item -LiteralPath $taskNotesPath -Destination (Join-Path $taskOutput 'release-notes.md')
+Copy-Item -LiteralPath $taskNotesPath -Destination (Join-Path $taskOutput 'RELEASE_NOTES.md')
 Copy-Item -LiteralPath $taskBuildInfo -Destination (Join-Path $taskOutput 'installer-build.json')
 Write-PortableText (Join-Path $taskOutput 'update-manifest.json') ($taskManifest | ConvertTo-Json -Depth 5)
 $taskDelivery = [ordered]@{schemaVersion=1;version=$taskVersion;tag=('v'+$taskVersion);repository='Aice-Chen/BatteryManager';prerelease=[bool]$Prerelease;sourceFingerprint=$taskVerified.sourceFingerprint;directory=$taskOutput;uploaded=$false}

@@ -36,11 +36,10 @@
 | `.artifacts/test-results` | 代码测试结果 |
 | `.artifacts/ci/<阶段>/<运行>` | 本机或 GitHub CI 的测试、构建日志与摘要 |
 | `.artifacts/tests/<主题>` | 定向检查与小型测试样本 |
-| `.artifacts/packages` | 干净构建的便携包及其构建目录 |
+| `.artifacts/packages` | 安装器内部负载 ZIP 及其干净构建目录，不对外提供便携版 |
 | `.artifacts/installers` | 安装器构建及编译日志 |
 | `.artifacts/releases` | 已组装的版本交付目录 |
 | `.artifacts/evidence/<版本或阶段>` | 验收摘要与证据入口 |
-| `.artifacts/installed/BatteryManager` | 本机已登记的安装版目录；运行目录，不随测试输出清理 |
 | `.artifacts/hardware` | 原始硬件证据 |
 | `.artifacts/archive` | 已归档历史证据 |
 | `docs/releases/<版本>` | 发布说明与变更记录 |
@@ -49,11 +48,11 @@
 
 ## 安装与更新
 
-`packaging/windows/BatteryManager.iss` 构建当前用户安装器，允许选择安装目录，升级复用原目录。`installed.json` 标识安装版；安装版用户数据使用 LocalApplicationData 下的 BatteryManager，便携版仍使用程序目录。卸载保留独立用户数据目录和用户自行添加的文件。
+`packaging/windows/BatteryManager.iss` 构建当前用户安装器，允许选择安装目录，升级复用原目录。产品统一以安装版交付；`installed.json` 标识安装版，用户数据使用 LocalApplicationData 下的 BatteryManager。未带标记的开发构建继续使用自身输出目录，避免测试读写日常配置。卸载保留独立用户数据目录和用户自行添加的文件；不提供旧便携配置导入功能。
 
-编译入口为 `scripts/package-installer.ps1`，接收通过校验的便携包和项目内已有的可信 Inno Setup 编译器，不负责下载或安装工具。本地验证使用 7.1.1；从官方发行取得的工具先核对发布摘要及 Authenticode，再放入 `.tools/inno-7.1.1`。编译器的有效签名不等于本项目生成的安装包已签名。
+编译入口为 `scripts/package-installer.ps1`，接收通过校验的内部负载 ZIP 和项目内已有的可信 Inno Setup 编译器，不负责下载或安装工具。既有 `PortablePackagePath` 参数与 `portable-common.ps1` 名称暂保留为内部接口，不表示继续发布便携版。本地验证使用 7.1.1；从官方发行取得的工具先核对发布摘要及 Authenticode，再放入 `.tools/inno-7.1.1`。编译器的有效签名不等于本项目生成的安装包已签名。
 
-`scripts/prepare-release.ps1` 校验安装包与便携包版本、来源指纹和摘要一致，再生成独立交付目录与 `update-manifest.json`。当前仅准备本地材料，不执行上传。
+`scripts/prepare-release.ps1` 校验安装包与内部负载的版本、来源指纹和摘要一致，再生成独立交付目录与仅含安装器的 `update-manifest.json`。内部 ZIP 留作发布前源码绑定校验，不上传；旧双包清单不得进入新的发布入口。
 
 更新客户端仅发现公开仓库的正式发布，忽略草稿和预览。先核对仓库、标签、版本、架构、文件名及大小，再下载到临时文件；实际长度与 SHA256 全部一致才保留完成文件。取消和失败不替换已有完成文件。HTTPS 与仓库发布权限构成当前来源信任边界，摘要不能代替发布者独立数字签名。
 
@@ -67,10 +66,10 @@
 
 1. 修改 `version.props`，在 `docs/releases/<版本>` 写使用者能看到的变更和已知限制。
 2. 运行代码与受影响的应用场景。安装/更新改动额外运行隔离生命周期及进程交接测试。
-3. 提交已审核的源代码与版本号，在干净工作树使用 `package-preview.ps1` 或正式入口 `package-release.ps1` 构建便携 ZIP；修改任何源输入后重新构建。打包前后必须保持同一提交和输入文件。
-4. 把该 ZIP 交给 `package-installer.ps1 -PortablePackagePath <路径>`，确保安装器与便携包来自同一负载。
+3. 提交已审核的源代码与版本号，在干净工作树使用 `package-preview.ps1` 或正式入口 `package-release.ps1` 构建内部负载 ZIP；修改任何源输入后重新构建。打包前后必须保持同一提交和输入文件。
+4. 把该 ZIP 交给 `package-installer.ps1 -PortablePackagePath <路径>`，确保安装器与内部负载来源一致。
 5. 使用 `prepare-release.ps1` 生成独立交付目录；预览必须带 `-Prerelease`。本地的 `installer-build.json`、`delivery.json` 含构建路径，不作为公开附件。
-6. 先运行 `publish-github-release.ps1 -DeliveryDirectory <目录> -TargetCommit <40位提交> -PlanOnly` 审核六个公开附件及目标提交。去掉 `-PlanOnly` 才调用 GitHub CLI，且只创建草稿，拒绝覆盖已有标签或发布。正式发布标签使用 `v<版本>`；正式更新客户端忽略预览与草稿。发布后保留该版本的 ZIP、安装器、摘要、manifest 和验证入口。
+6. 先运行 `publish-github-release.ps1 -DeliveryDirectory <目录> -TargetCommit <40位提交> -PlanOnly` 审核四个公开附件及目标提交：安装器、安装器摘要、`update-manifest.json`、`RELEASE_NOTES.md`。去掉 `-PlanOnly` 才调用 GitHub CLI，且只创建草稿，拒绝覆盖已有标签或发布。正式发布标签使用 `v<版本>`；正式更新客户端忽略预览与草稿。发布后本地保留内部 ZIP、安装器、摘要、manifest 和验证入口。
 
 新包同时记录实际构建字节的 `source-files.sha256` 和 Git 规范字节的 `source-git-files.sha256`。发布校验逐项比较文件集合、摘要与指定的完整提交，只容许明确限定的文本换行转换；额外、缺失或不同内容的源码不能通过。旧包仍可做完整性检查，但缺少提交绑定信息的旧包不能走新的发布入口。`test-github-release-tooling.ps1` 使用本地 CLI 替身验证失败、覆盖保护和白名单，不访问 GitHub。
 
@@ -82,12 +81,12 @@
 
 ## 真实安装升级验收
 
-真实验收共用当前用户的安装登记和配置；即使安装目录在项目内，也必须先备份现有配置、Run/StartupApproved 状态、卸载登记及开始菜单快捷方式。以用户实际使用的便携目录为迁移来源，不能从开发预览目录猜测最新配置。所有结果集中保存到本轮 `.artifacts/evidence/<阶段>`。
+真实验收共用当前用户的安装登记和配置；即使安装目录在项目内，也必须先备份现有配置、Run/StartupApproved 状态、卸载登记及开始菜单快捷方式。迁移安装位置保留现有 LocalAppData 配置，不从其他程序目录导入。所有结果集中保存到本轮 `.artifacts/evidence/<阶段>`。更换安装目录须先正常退出后安装，不能沿用要求路径一致的 `/WAITPID` 原地升级交接；新目录注册完成后不可运行旧目录的卸载器去删除共用登记。
 
-普通安装版带 `--test-pipe <唯一后缀>` 启动后，可通过 `app-test-client.ps1` 打开设置，并调用 `ui / management-import-directory / value=<便携目录>`。该入口沿用正式导入、无覆盖与保存屏障；它使用真实存储，不能当作演示模式使用。
+安装验收同时检查程序实际运行路径、快捷方式、卸载登记、Run 与 Windows 启动许可。工具进程回读注册表不足以单独证明系统已接受登记，必要时与独立系统提供者及 Windows 设置交叉核对。
 
 端到端更新验收可额外指定 `--update-fixture <绝对 JSON 路径>`。该模式仅替换 HTTP 响应：文件内 URL 与请求精确匹配，未匹配直接失败，不回退网络。真实版本比较、manifest、长度与 SHA256 校验、下载、保存排空、原生 I/O 排空及 Inno 进程交接继续执行。界面和日志明确标记本地验收；不能与 `--scenario` 合用。安装时仅该模式附加固定静默参数，安装日志留在 fixture 目录。
 
 fixture 的 `schemaVersion` 为 1，`purpose` 为 `local-update-acceptance`；`responses` 每项明确填写 `url`、`statusCode`、`bodyFile`、`location`、`delayMilliseconds`。`bodyFile` 只能引用同目录内的相对文件；没有内容或跳转时对应字段为 null。GitHub release JSON、更新 manifest 与安装包必须使用同一个真实版本，不得将旧程序改名充当新版。候选可以只在本地存在，不应为了验收发布虚构线上版本。
 
-按“旧版启动及导入 → 发现新版 → 下载校验 → App 排空退出 → 安装器等待旧进程结束 → 新版启动与配置核对 → 回退旧版并核对 → 恢复候选”的顺序验收。真实登录自启需另由用户注销并登录；本地 HTTP fixture 验收不能代替 GitHub 实际发布与下载验证。
+按“旧安装版启动 → 发现新版 → 下载校验 → App 排空退出 → 安装器等待旧进程结束 → 新版启动与配置核对 → 回退旧版并核对 → 恢复候选”的顺序验收。真实登录自启需另由用户注销并登录；本地 HTTP fixture 验收不能代替 GitHub 实际发布与下载验证。
