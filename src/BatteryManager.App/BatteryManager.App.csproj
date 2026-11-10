@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>BatteryManager.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.4" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
+    <ProjectReference Include="../BatteryManager.Core/BatteryManager.Core.csproj" />
+    <ProjectReference Include="../BatteryManager.WindowsNative/BatteryManager.WindowsNative.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Tray number font: Barlow Semi Condensed Medium (SIL Open Font License 1.1). Embedded and loaded for
+         this process only; the licence text ships next to the app as licenses\Barlow-OFL.txt. -->
+    <EmbeddedResource Include="Assets\Fonts\BarlowSemiCondensed-Medium.ttf" LogicalName="BatteryManager.App.TrayDigits.ttf" />
+    <Content Include="Assets\Fonts\OFL.txt" Link="licenses\Barlow-OFL.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- App icon, drawn by tools/app-icon. AppIcon.ico (above) is the exe icon; these PNG frames are what the title bar
+         and the tray panel footer show at 16 DIP for each display scale. -->
+    <EmbeddedResource Include="Assets\AppIcon\*.png" LogicalName="BatteryManager.App.AppIcon.%(Filename).png" />
+  </ItemGroup>
+  <!-- Unpackaged WinUI publishing can omit the app's generated resource index. -->
+  <Target Name="PublishApplicationResources" BeforeTargets="ComputeResolvedFilesToPublishList" DependsOnTargets="$(GenerateProjectPriFile)">
+    <Error Condition="!Exists('$(ProjectPriFullPath)')" Text="The generated WinUI application resource index is missing." />
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(ProjectPriFullPath)">
+        <RelativePath>$(ProjectPriFileName)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>

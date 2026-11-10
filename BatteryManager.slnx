@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BatteryManager.App/BatteryManager.App.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/BatteryManager.Cli/BatteryManager.Cli.csproj" />
+    <Project Path="src/BatteryManager.Core/BatteryManager.Core.csproj" />
+    <Project Path="src/BatteryManager.WindowsNative/BatteryManager.WindowsNative.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BatteryManager.Cli.Probe/BatteryManager.Cli.Probe.csproj" />
+    <Project Path="tests/BatteryManager.Cli.Tests/BatteryManager.Cli.Tests.csproj" />
+    <Project Path="tests/BatteryManager.Core.Tests/BatteryManager.Core.Tests.csproj" />
+    <Project Path="tests/BatteryManager.Session.Tests/BatteryManager.Session.Tests.csproj" />
+    <Project Path="tests/BatteryManager.WindowsNative.Tests/BatteryManager.WindowsNative.Tests.csproj" />
+  </Folder>
+</Solution>

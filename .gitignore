@@ -1,0 +1,21 @@
+.tools/
+.artifacts/
+**/bin/
+**/obj/
+**/TestResults/
+.vs/
+*.user
+
+# Local collaboration history and original hardware handoff stay on this machine.
+/AGENTS.md
+/docs/design/
+/docs/plans/
+/docs/reviews/
+/docs/rewrite-handoff/
+/docs/specs/
+/docs/ui-handoff/
+**/settings.json
+**/settings.v*.bak
+**/logs/
+.env
+.env.*
