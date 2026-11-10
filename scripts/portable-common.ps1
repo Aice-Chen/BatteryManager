@@ -84,7 +84,7 @@ function Get-PortableSourceSnapshot([string]$ProjectRoot) {
 
 function Assert-PortablePayloadPath([string]$RelativePath) {
     if (-not (Test-PortableRelativePath $RelativePath)) { throw "Non-portable payload path: $RelativePath" }
-    if ($RelativePath -match '(?i)(^|/)(logs|settings(?:\.[^/]*)?\.json|settings\.json[^/]*|settings\.v\d+\.bak|diagnostic-[^/]*|last-error\.txt|TestResults|tests|\.artifacts|\.git|bin|obj)(/|$)' -or
+    if ($RelativePath -match '(?i)(^|/)(logs|updates|installed\.json|management\.json[^/]*|settings(?:\.[^/]*)?\.json|settings\.json[^/]*|settings\.v\d+\.bak|diagnostic-[^/]*|last-error\.txt|TestResults|tests|\.artifacts|\.git|bin|obj)(/|$)' -or
         $RelativePath -match '(?i)\.(pdb|user|trx)$') { throw "Local settings, diagnostics, or build-only files cannot be shipped: $RelativePath" }
 }
 

@@ -11,7 +11,9 @@ $taskRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd('
 . (Join-Path $PSScriptRoot 'portable-common.ps1')
 . (Join-Path $PSScriptRoot 'release-common.ps1')
 $taskCompiler = Resolve-PortableProjectPath $CompilerPath $taskRoot
-if (-not (Test-Path -LiteralPath $taskCompiler -PathType Leaf)) { throw 'No trusted local Inno compiler is available. Compiler acquisition is paused after a security-product alert. Supply an already verified project-local compiler with -CompilerPath; this script does not download or install tools.' }
+if (-not (Test-Path -LiteralPath $taskCompiler -PathType Leaf)) { throw 'Supply a verified project-local Inno compiler with -CompilerPath; this script does not download or install tools.' }
+$taskCompilerVersion = (& $taskCompiler --version | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $taskCompilerVersion -cnotmatch '^\d+\.\d+\.\d+$') { throw 'The Inno compiler did not report a usable engine version.' }
 $taskOutput = Resolve-PortableProjectPath $OutputDirectory $taskRoot -ArtifactsOnly
 if (-not $PortablePackagePath) {
     $taskPortable = & (Join-Path $PSScriptRoot 'package-preview.ps1') -Release:$Release
@@ -30,7 +32,7 @@ $taskMarker = Join-Path $taskRoot 'packaging/windows/installed.json'
 $taskScriptHash = (Get-FileHash -LiteralPath $taskScript -Algorithm SHA256).Hash
 $taskMarkerHash = (Get-FileHash -LiteralPath $taskMarker -Algorithm SHA256).Hash
 $taskNumericVersion = $taskVersion.Split('-', 2)[0] + '.0'
-$taskArguments = @('/Q', ('/DPayloadDirectory=' + $taskVerified.extractedDirectory), ('/DOutputDirectory=' + $taskRun), ('/DAppVersion=' + $taskVersion), ('/DNumericVersion=' + $taskNumericVersion), $taskScript)
+$taskArguments = @('/Q', '/DPublishableBuild=1', ('/DPayloadDirectory=' + $taskVerified.extractedDirectory), ('/DOutputDirectory=' + $taskRun), ('/DAppVersion=' + $taskVersion), ('/DNumericVersion=' + $taskNumericVersion), $taskScript)
 & $taskCompiler @taskArguments 2>&1 | Tee-Object -FilePath (Join-Path $taskRun 'compile.log') | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "Inno compiler failed with exit code $LASTEXITCODE." }
 if ((Get-FileHash -LiteralPath $taskScript -Algorithm SHA256).Hash -cne $taskScriptHash -or
@@ -44,8 +46,8 @@ $taskInfo = [ordered]@{
     portablePackagePath = $taskPortablePath; portableSha256 = $taskVerified.archiveSha256
     payloadSourceFingerprint = $taskVerified.sourceFingerprint
     installerScriptSha256 = $taskScriptHash.ToLowerInvariant(); installedMarkerSha256 = $taskMarkerHash.ToLowerInvariant()
-    compilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($taskCompiler).ProductVersion
-    installed = $false; signed = $false
+    compilerVersion = $taskCompilerVersion
+    installed = $false; signed = $false; testOnly = $false
 }
 Write-PortableText (Join-Path $taskRun 'installer-build.json') ($taskInfo | ConvertTo-Json -Depth 5)
 [pscustomobject]$taskInfo

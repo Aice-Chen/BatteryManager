@@ -22,6 +22,9 @@ if ($taskVersion.Contains('-') -ne [bool]$Prerelease) { throw 'Preview versions 
 $taskBuildInfo = Join-Path (Split-Path -Parent $taskInstallerPath) 'installer-build.json'
 if (-not (Test-Path -LiteralPath $taskBuildInfo -PathType Leaf)) { throw 'The installer build record is missing.' }
 $taskInstallerInfo = Get-Content -LiteralPath $taskBuildInfo -Raw | ConvertFrom-Json
+if ($null -eq $taskInstallerInfo.PSObject.Properties['testOnly'] -or $taskInstallerInfo.testOnly -isnot [bool] -or $taskInstallerInfo.testOnly) {
+    throw 'Only a verified production installer build record can enter a release.'
+}
 if ($taskInstallerInfo.version -cne $taskVersion -or $taskInstallerInfo.portableSha256 -cne $taskVerified.archiveSha256 -or
     $taskInstallerInfo.payloadSourceFingerprint -cne $taskVerified.sourceFingerprint) { throw 'Installer and portable package were not built from the same payload.' }
 $taskAssets = @()
