@@ -4,7 +4,7 @@ using Microsoft.UI.Xaml;
 
 namespace BatteryManager.App;
 
-public partial class App : Application
+public partial class App : Microsoft.UI.Xaml.Application
 {
     private SingleInstance? _instance;
     private BatterySession? _session;
@@ -20,6 +20,8 @@ public partial class App : Application
     private AppTestClock? _testClock;
     private AppScenarios? _scenarios;
     private TrayPreferencesStore? _preferencesStore;
+    private AppDataPaths? _dataPaths;
+    private static string _logDirectory = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
     private IReadOnlyList<TrayPreference> _priorities = [];
     private string? _preferencesWarning;
     private Task<string?>? _savePreferences;
@@ -44,7 +46,7 @@ public partial class App : Application
     {
         try
         {
-            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
+            var path = _logDirectory;
             System.IO.Directory.CreateDirectory(path);
             var file = System.IO.Path.Combine(path, "last-error.txt");
             System.IO.File.WriteAllText(file, $"{DateTimeOffset.UtcNow:O}\n{message}\n{exception}");
@@ -92,12 +94,29 @@ public partial class App : Application
             _clock = _scenarios.Clock;
             if (testPipe is not null) _prioritySaveTest = new();
         }
+        else
+        {
+            try
+            {
+                _dataPaths = AppDataPaths.Resolve(AppContext.BaseDirectory,
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+                _logDirectory = _dataPaths.LogsDirectory;
+            }
+            catch (Exception error)
+            {
+                RecordCrash(error, "Application data location could not be resolved");
+                Environment.ExitCode = 2;
+                _instance.Dispose();
+                Exit();
+                return;
+            }
+        }
         if (testPipe is not null)
         {
             if (_scenarios is null) _clock = _testClock = new AppTestClock();
             try
             {
-                var directory = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
+                var directory = _logDirectory;
                 System.IO.Directory.CreateDirectory(directory);
                 var path = System.IO.Path.Combine(directory, $"diagnostic-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Environment.ProcessId}.jsonl");
                 _diagnostics = new AppDiagnosticLog(_scenarios?.HidIo ?? new WindowsHidIo(), path);
@@ -106,7 +125,7 @@ public partial class App : Application
         }
         if (_scenarios is null)
         {
-            _preferencesStore = new TrayPreferencesStore(System.IO.Path.Combine(AppContext.BaseDirectory, "settings.json"));
+            _preferencesStore = new TrayPreferencesStore(_dataPaths!.SettingsPath);
             var loaded = _preferencesStore.Load();
             _priorities = loaded.Priorities;
             _preferencesWarning = loaded.Error;
@@ -587,7 +606,7 @@ public partial class App : Application
                 break;
             case "capture-tray-glyphs":
                 if (_scenarios is null) throw new InvalidOperationException("Glyph diagnostics require an isolated scenario.");
-                await TrayGlyphDiagnostics.ExportAsync(Path.Combine(AppContext.BaseDirectory, "logs", "tray-glyphs")); break;
+                await TrayGlyphDiagnostics.ExportAsync(Path.Combine(_logDirectory, "tray-glyphs")); break;
             case "animations":
                 if (_scenarios is null) throw new InvalidOperationException("Animation overrides require an isolated scenario.");
                 Motion.TestEnabled = value switch { "on" => true, "off" => false, "reset" => null, _ => throw new ArgumentException("Use on, off or reset.") }; break;
@@ -691,7 +710,7 @@ public partial class App : Application
         if (_scenarios is null) throw new InvalidOperationException("Image capture is available only for fictional scenarios.");
         if (string.IsNullOrEmpty(name) || name.Length > 64 || !name.EndsWith(".png", StringComparison.Ordinal)
             || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '.'))) throw new ArgumentException("Use a simple PNG filename.");
-        var path = Path.Combine(AppContext.BaseDirectory, "logs", "screenshots");
+        var path = Path.Combine(_logDirectory, "screenshots");
         Directory.CreateDirectory(path);
         return path;
     }

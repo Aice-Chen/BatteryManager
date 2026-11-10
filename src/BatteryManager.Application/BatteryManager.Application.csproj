@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BatteryManager.Core/BatteryManager.Core.csproj" />
+    <InternalsVisibleTo Include="BatteryManager.App" />
+    <InternalsVisibleTo Include="BatteryManager.Application.Tests" />
+    <InternalsVisibleTo Include="BatteryManager.App.Logic.Tests" />
+  </ItemGroup>
+</Project>

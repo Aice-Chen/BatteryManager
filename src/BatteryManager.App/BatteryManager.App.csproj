@@ -20,6 +20,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.4" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
+    <ProjectReference Include="../BatteryManager.Application/BatteryManager.Application.csproj" />
     <ProjectReference Include="../BatteryManager.Core/BatteryManager.Core.csproj" />
     <ProjectReference Include="../BatteryManager.WindowsNative/BatteryManager.WindowsNative.csproj" />
   </ItemGroup>

@@ -2,7 +2,7 @@ using BatteryManager.App;
 using BatteryManager.Core;
 using Xunit;
 
-namespace BatteryManager.WindowsNative.Tests;
+namespace BatteryManager.App.Logic.Tests;
 
 public sealed class AppScenarioTests
 {

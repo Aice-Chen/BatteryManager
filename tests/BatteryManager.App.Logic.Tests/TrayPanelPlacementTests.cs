@@ -1,7 +1,7 @@
 using BatteryManager.App;
 using Xunit;
 
-namespace BatteryManager.WindowsNative.Tests;
+namespace BatteryManager.App.Logic.Tests;
 
 public sealed class TrayPanelPlacementTests
 {

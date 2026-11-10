@@ -99,7 +99,7 @@ internal static class UiText
     { DeviceTransport.Bluetooth => "\uE702", DeviceTransport.Receiver => "\uE957", DeviceTransport.Wired => "\uE88E", _ => "\uE772" };
     public static SolidColorBrush Brush(byte red, byte green, byte blue) => new(Color.FromArgb(255, red, green, blue));
     private static bool Dark(FrameworkElement? element) => element?.ActualTheme == ElementTheme.Dark ||
-        (element is null && Application.Current.RequestedTheme == ApplicationTheme.Dark);
+        (element is null && Microsoft.UI.Xaml.Application.Current.RequestedTheme == ApplicationTheme.Dark);
     public static SolidColorBrush InkFor(FrameworkElement? element) => Dark(element) ? Brush(255, 255, 255) : Brush(27, 27, 27);
     public static SolidColorBrush MutedFor(FrameworkElement? element) => Dark(element) ? Brush(173, 173, 173) : Brush(100, 100, 100);
     public static SolidColorBrush BackgroundFor(FrameworkElement? element) => Dark(element) ? Brush(32, 32, 32) : Brush(243, 243, 243);
