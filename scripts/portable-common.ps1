@@ -67,7 +67,8 @@ function Get-PortableTextHash([string]$Text) {
 function Get-PortableSourceSnapshot([string]$ProjectRoot) {
     $paths = [Collections.Generic.List[string]]::new()
     foreach ($rootFile in @('Directory.Build.props', 'version.props', 'global.json', 'BatteryManager.slnx')) { $paths.Add((Join-Path $ProjectRoot $rootFile)) }
-    foreach ($directory in @('src', 'scripts')) {
+    foreach ($directory in @('src', 'scripts', 'packaging')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $directory))) { continue }
         foreach ($path in Get-PortableFiles (Join-Path $ProjectRoot $directory) @('bin', 'obj')) { $paths.Add($path) }
     }
     $paths.Sort([StringComparer]::Ordinal)
