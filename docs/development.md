@@ -76,6 +76,8 @@
 
 应用管理交互测试入口为 `test-app-management.ps1 -PreviewExe <项目内隔离程序>`，替换网络、注册表、硬件及安装动作，仍运行正式协调和控件。`test-installer-lifecycle.ps1` 与 `test-installer-handoff.ps1` 先生成计划，复核后对该计划传 `-Execute -PreparedDirectory <目录>`；独立 AppId/互斥体、禁用系统注册和程序启动，使用假负载或最小进程组件。测试版安装器不能进入发布链。
 
+`test-installer-startup.ps1` 验证真实 Inno 任务选择与登记逻辑，测试键限定到随机的当前用户隔离子树，正式 Run/StartupApproved/卸载登记仅作前后只读核对。安装默认值来自当时实际的 Run 注册，显式 `/TASKS` 或 `/MERGETASKS` 由 Inno 处理；不沿用过时的安装历史，也不修改 Windows 启动许可。
+
 `.github/workflows/verify.yml` 在 Windows runner 上运行六个代码测试项目、离线发布工具检查和 Release 构建。工作流只读仓库，仅上传测试日志及结果；不运行硬件、安装器或发布操作。本机可运行相同的 `ci-verify.ps1`。远端运行是否通过，以对应提交的 Actions 结果为准。
 
 ## 真实安装升级验收

@@ -11,6 +11,12 @@
 #ifndef NumericVersion
   #error NumericVersion is required
 #endif
+#ifdef StartupTaskTest
+  #ifndef IsolationTestId
+    #error Startup task tests require an isolated installer
+  #endif
+  #define StartupTaskEnabled
+#endif
 #ifdef IsolationTestId
   #ifdef PublishableBuild
     #error A publishable installer cannot enable isolation test mode
@@ -31,6 +37,7 @@
     #error A publishable installer cannot override the handoff timeout
   #endif
   #define HandoffWaitMilliseconds 30000
+  #define StartupTaskEnabled
 #endif
 
 [Setup]
@@ -82,9 +89,12 @@ UninstallLogging=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
-#ifndef IsolationTestId
+#ifdef StartupTaskEnabled
 [Tasks]
-Name: "startup"; Description: "{code:StartupTaskDescription}"; Flags: unchecked
+; Create the default in the task list itself. Inno applies /TASKS and /MERGETASKS afterwards.
+; InitializeWizard runs before this list exists, so WizardSelectTasks there cannot set the default.
+Name: "startup"; Description: "{code:StartupTaskDescription}"; Check: StartupRegistered
+Name: "startup"; Description: "{code:StartupTaskDescription}"; Check: not StartupRegistered; Flags: unchecked
 #endif
 
 [Files]
@@ -214,11 +224,19 @@ begin
   end;
 end;
 
-#ifndef IsolationTestId
+#ifdef StartupTaskEnabled
 const
+#ifdef StartupTaskTest
+  RunKey = 'Software\BatteryManager\InstallerTaskTests\{#IsolationTestId}\Run';
+  ApprovalKey = 'Software\BatteryManager\InstallerTaskTests\{#IsolationTestId}\StartupApproved';
+#else
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
-  RunValueName = 'BatteryManager';
   ApprovalKey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run';
+#endif
+  RunValueName = 'BatteryManager';
+var
+  StartupDefaultRead: Boolean;
+  StartupDefaultSelected: Boolean;
 
 // Match the app's conservative interpretation. StartupApproved is never written or removed.
 // 0 = no record, 1 = known allowed, 2 = known blocked, 3 = unknown format/access.
@@ -248,21 +266,6 @@ begin
   else if Approval = 3 then Result := Result + CustomMessage('StartupUnknownSuffix');
 end;
 
-function HasExplicitTaskSelection: Boolean;
-var
-  I: Integer;
-  Param: String;
-begin
-  Result := False;
-  for I := 1 to ParamCount do begin
-    Param := Uppercase(ParamStr(I));
-    if (Pos('/TASKS=', Param) = 1) or (Pos('/MERGETASKS=', Param) = 1) then begin
-      Result := True;
-      Exit;
-    end;
-  end;
-end;
-
 function CommandExecutable(Command: String): String;
 var
   EndIndex: Integer;
@@ -285,14 +288,17 @@ begin
   Result := CompareText(ExtractFileName(CommandExecutable(Command)), 'BatteryManager.App.exe') = 0;
 end;
 
-procedure InitializeWizard;
+function StartupRegistered: Boolean;
 var
   Command: String;
 begin
   // Use the effective current Run setting, including changes made in the app after an install.
   // Checked means registered, not allowed by Windows. Preserve the registration on unattended upgrades.
-  if not HasExplicitTaskSelection and RegQueryStringValue(HKCU, RunKey, RunValueName, Command) and IsBatteryManagerCommand(Command) then
-    WizardSelectTasks('startup');
+  if not StartupDefaultRead then begin
+    StartupDefaultRead := True;
+    StartupDefaultSelected := RegQueryStringValue(HKCU, RunKey, RunValueName, Command) and IsBatteryManagerCommand(Command);
+  end;
+  Result := StartupDefaultSelected;
 end;
 
 #endif
@@ -309,7 +315,7 @@ begin
 #endif
 end;
 
-#ifndef IsolationTestId
+#ifdef StartupTaskEnabled
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Command: String;
@@ -318,8 +324,15 @@ var
 begin
   if CurStep <> ssPostInstall then Exit;
   Saved := True;
-  if WizardIsTaskSelected('startup') then
-    Saved := RegWriteStringValue(HKCU, RunKey, RunValueName, '"' + ExpandConstant('{app}\BatteryManager.App.exe') + '"')
+  if WizardIsTaskSelected('startup') then begin
+    // A same-name entry owned by another program or using an unknown value type is not ours to replace.
+    if RegValueExists(HKCU, RunKey, RunValueName) and
+      (not RegQueryStringValue(HKCU, RunKey, RunValueName, Command) or not IsBatteryManagerCommand(Command)) then begin
+      Saved := False;
+      Log('Startup registration preserved: existing Run value is not recognized as Battery Manager.');
+    end else
+      Saved := RegWriteStringValue(HKCU, RunKey, RunValueName, '"' + ExpandConstant('{app}\BatteryManager.App.exe') + '"');
+  end
   else if RegQueryStringValue(HKCU, RunKey, RunValueName, Command) and IsBatteryManagerCommand(Command) then
     Saved := RegDeleteValue(HKCU, RunKey, RunValueName);
   if not Saved then begin
