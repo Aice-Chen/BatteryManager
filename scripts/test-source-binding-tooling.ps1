@@ -124,9 +124,31 @@ foreach($changed in @('BatteryManager.iss','installed.json')) {
     }
 }
 Test-SourceCase 'explicit-crlf-with-autocrlf-disabled' $true { param($r,$s)
+    # Reproduce Windows CI's real CRLF script copies even when this test itself was checked out as LF.
+    foreach($script in Get-ChildItem -LiteralPath (Join-Path $r 'scripts') -File) {
+        Write-PortableText $script.FullName ([IO.File]::ReadAllText($script.FullName).Replace("`r`n","`n").Replace("`n","`r`n"))
+    }
+    $before=Get-PortableCommittedSourceSnapshot $r $s.commit
+    if($before.autoCrlf -cne 'true' -or $before.gitSha256 -cne $s.gitSha256){throw 'CRLF copies did not bind under the original checkout policy.'}
     $null=Invoke-PortableGitText $r @('config','core.autocrlf','false')
+    $rejected=$false
+    try{$null=Get-PortableCommittedSourceSnapshot $r}catch{
+        if($_.Exception.Message -notlike '*Build input differs from the target commit: scripts/*' -and
+            $_.Exception.Message -notlike '*clean committed worktree*'){throw}
+        $rejected=$true
+    }
+    if(-not $rejected){throw 'CRLF scripts without text attributes were accepted after disabling autocrlf.'}
+    # Changing config does not rewrite files, and checkout-index skips stat-identical files even with --force.
+    # Remove only these known fixture files so Git must materialize them under the new checkout policy.
+    foreach($script in Get-ChildItem -LiteralPath (Join-Path $r 'scripts') -File) { Remove-Item -LiteralPath $script.FullName }
     $path=Join-Path $r 'src/explicit-crlf.cs'
-    Write-PortableText $path ([IO.File]::ReadAllText($path).Replace("`n","`r`n"))
+    Remove-Item -LiteralPath $path
+    $null=Invoke-PortableGitText $r @('checkout-index','--all','--force')
+    $explicitText=[IO.File]::ReadAllText($path)
+    if(-not $explicitText.Contains("`r`n") -or $explicitText.Replace("`r`n",'').Contains("`n")){throw 'Explicit eol=crlf was not applied to the checkout.'}
+    foreach($script in Get-ChildItem -LiteralPath (Join-Path $r 'scripts') -File) {
+        if([IO.File]::ReadAllText($script.FullName).Contains("`r")){throw 'Scripts were not restored to their committed LF bytes.'}
+    }
     $after=Get-PortableCommittedSourceSnapshot $r
     if($after.autoCrlf -cne 'false' -or $after.gitSha256 -cne $s.gitSha256){throw 'Committed text/eol attributes were not honored.'}
 }
