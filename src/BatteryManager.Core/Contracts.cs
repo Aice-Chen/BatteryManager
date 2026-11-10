@@ -5,6 +5,7 @@ public enum ConnectionState { Online, Recent, Pending, Offline }
 public enum BatteryEvidence { SystemCache, SourceTimestamp, ActiveRead }
 public enum BatteryFreshness { Unknown, Current, Recent, Retained, Expired }
 public enum ReadStatus { Success, Missing, Unsupported, Error, Timeout, Canceled }
+public enum DeviceTransport { Unknown, Bluetooth, Receiver, Wired, Mixed }
 
 public sealed record BatterySample(
     int Percent,
@@ -32,7 +33,9 @@ public sealed record DeviceObservation(
     BatterySample? Battery = null,
     ReadStatus Status = ReadStatus.Success,
     string? Error = null,
-    TimeSpan? ReceivedElapsed = null);
+    TimeSpan? ReceivedElapsed = null,
+    // Verified by the adapter. Descriptive metadata never confirms a connection.
+    DeviceTransport Transport = DeviceTransport.Unknown);
 
 // A complete authoritative batch covers membership in its Source, not all devices.
 public sealed record SourceBatch(
@@ -85,7 +88,8 @@ public sealed record DeviceState(
 
 public sealed record DeviceSourceAttempt(
     string EndpointId, string Source, ReadStatus Status, string? Error,
-    bool IsCurrentRound, bool Coarse, ConnectionState Connection);
+    bool IsCurrentRound, bool Coarse, ConnectionState Connection,
+    DeviceTransport Transport = DeviceTransport.Unknown);
 
 public sealed record StateSnapshot(
     long Version,

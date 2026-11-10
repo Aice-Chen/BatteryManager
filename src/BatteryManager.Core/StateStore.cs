@@ -224,6 +224,8 @@ public sealed class StateStore
 
         var validTime = receivedElapsed <= now;
         if (validTime) source.LastReceivedElapsed = receivedElapsed;
+        if (validTime && observation.Transport is DeviceTransport.Bluetooth or DeviceTransport.Receiver or DeviceTransport.Wired)
+            source.Transport = observation.Transport;
         source.Attempt = observation.Status;
         source.Error = observation.Error;
         source.AttemptedAt = observation.ReceivedAt;
@@ -400,7 +402,7 @@ public sealed class StateStore
                     attempts.Add(new(endpointId, pair.Key, status, fieldFailure?.Error ?? source.Error,
                         source.AttemptGeneration == _generation,
                         source.Fields.Values.Any(field => (field.Latest?.Sample.Precision ?? field.Qualified?.Sample.Precision)?.StartsWith("coarse:", StringComparison.Ordinal) == true),
-                        endpointConnection));
+                        endpointConnection, source.Transport));
                     if (source.Error is not null && source.AttemptedElapsed >= latestErrorAt)
                     {
                         latestError = source.Error;
@@ -812,7 +814,7 @@ public sealed class StateStore
                 Add(attempt.EndpointId); Add(attempt.Source); Add(attempt.Status); Add(attempt.Error);
                 // The latest source result remains displayed until that source
                 // reports again; a new scan alone must not flicker its warning.
-                Add(attempt.Coarse); Add(attempt.Connection);
+                Add(attempt.Coarse); Add(attempt.Connection); Add(attempt.Transport);
             }
         }
         return text.ToString();
@@ -850,6 +852,7 @@ public sealed class StateStore
 
     private sealed class Source
     {
+        public DeviceTransport Transport { get; set; }
         public TimeSpan LastReceivedElapsed { get; set; } = TimeSpan.MinValue;
         public TimeSpan? PositiveAt { get; set; }
         public TimeSpan? PositiveUntil { get; set; }

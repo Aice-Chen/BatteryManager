@@ -439,7 +439,8 @@ public sealed class DeviceLinkTests
             receiver ? "hid.lofree.compx" : "windows.pnp", at.Utc, Connected: connected, PathPresent: true,
             Battery: percent is { } value ? new(value, systemCache ? BatteryEvidence.SystemCache : BatteryEvidence.ActiveRead,
                 systemCache ? null : at.Utc, ReadAt: at.Utc, ReadElapsed: at.Elapsed) : null,
-            Status: percent is not null ? ReadStatus.Success : ReadStatus.Missing, ReceivedElapsed: at.Elapsed);
+            Status: percent is not null ? ReadStatus.Success : ReadStatus.Missing, ReceivedElapsed: at.Elapsed,
+            Transport: receiver ? DeviceTransport.Receiver : DeviceTransport.Bluetooth);
     }
 
     private sealed class Fixture

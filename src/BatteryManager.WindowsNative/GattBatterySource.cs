@@ -72,7 +72,7 @@ public sealed class GattBatterySource : IDeviceSource
                         WindowsDeviceMapping.NormalizeContainer(WindowsDeviceMapping.Text(candidate.Properties, "System.Devices.Aep.ContainerId")),
                         WindowsDeviceMapping.Address(candidate), candidate.Name, WindowsDeviceMapping.Kind(candidate), SourceId,
                         receivedAt.Utc, Connected: sample is not null ? true : null, Battery: sample, Status: status, Error: error,
-                        ReceivedElapsed: receivedAt.Elapsed);
+                        ReceivedElapsed: receivedAt.Elapsed, Transport: DeviceTransport.Bluetooth);
                     observations.Add(observation);
                     publish(new(SourceId, [observation]));
                 }

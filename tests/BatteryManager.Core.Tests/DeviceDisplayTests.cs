@@ -172,16 +172,18 @@ public sealed class DeviceDisplayTests
     }
 
     [Theory]
-    [InlineData("hid:atk:373b:11d9:receiver:sample", "hid.atk.compx", DeviceTransport.Receiver)]
-    [InlineData("hid:lofree:05ac:024f:receiver:sample", "hid.lofree.compx", DeviceTransport.Receiver)]
-    [InlineData("hid:mchose:a8a5:2255:receiver:sample", "hid.mchose.g3", DeviceTransport.Receiver)]
-    [InlineData("usb:arbitrary", "hid.unknown", DeviceTransport.Unknown)]
-    [InlineData("usb:arbitrary", "hid.atk.compx", DeviceTransport.Unknown)]
-    [InlineData("bt-le:020000000011", "bluetooth.gatt.bas", DeviceTransport.Bluetooth)]
-    public void Transport_uses_verified_path_and_source_evidence(string endpoint, string source, DeviceTransport expected)
+    [InlineData("opaque-device", "future.receiver", DeviceTransport.Receiver, DeviceTransport.Receiver)]
+    [InlineData("opaque-device", "future.bluetooth", DeviceTransport.Bluetooth, DeviceTransport.Bluetooth)]
+    [InlineData("opaque-device", "future.wired", DeviceTransport.Wired, DeviceTransport.Wired)]
+    [InlineData("hid:atk:373b:11d9:receiver:sample", "hid.atk.compx", DeviceTransport.Unknown, DeviceTransport.Unknown)]
+    [InlineData("bt-le:020000000011", "bluetooth.gatt.bas", DeviceTransport.Unknown, DeviceTransport.Unknown)]
+    [InlineData("opaque-device", "future.receiver", DeviceTransport.Mixed, DeviceTransport.Unknown)]
+    [InlineData("opaque-device", "future.receiver", (DeviceTransport)999, DeviceTransport.Unknown)]
+    public void Transport_comes_from_adapter_metadata_without_interpreting_source_names_or_paths(
+        string endpoint, string source, DeviceTransport transport, DeviceTransport expected)
     {
         var store = new StateStore();
-        Scan(store, 1, 0, Observation(0, source: source) with { EndpointId = endpoint, BluetoothAddress = null });
+        Scan(store, 1, 0, Observation(0, source: source) with { EndpointId = endpoint, BluetoothAddress = null, Transport = transport });
         Assert.Equal(expected, DeviceDisplayMapper.Map(Assert.Single(store.Snapshot(At(0)).Devices))!.Transport);
     }
 
@@ -193,7 +195,7 @@ public sealed class DeviceDisplayTests
         store.BeginScan(1, false);
         Put(store, 1, 0, Observation(0) with { ContainerId = container });
         var receiver = Observation(0, source: "hid.atk.compx") with
-        { EndpointId = "hid:atk:373b:11d9:receiver:sample", BluetoothAddress = null, ContainerId = container };
+        { EndpointId = "hid:atk:373b:11d9:receiver:sample", BluetoothAddress = null, ContainerId = container, Transport = DeviceTransport.Receiver };
         Put(store, 1, 0, receiver);
         store.EndScan(1);
         Assert.Equal(DeviceTransport.Mixed, DeviceDisplayMapper.Map(Assert.Single(store.Snapshot(At(0)).Devices))!.Transport);
@@ -208,7 +210,7 @@ public sealed class DeviceDisplayTests
         var store = new StateStore();
         store.BeginScan(1, false);
         var receiver = Observation(0, source: "hid.atk.compx") with
-        { EndpointId = "hid:atk:373b:11d9:receiver:sample", BluetoothAddress = null, ContainerId = container };
+        { EndpointId = "hid:atk:373b:11d9:receiver:sample", BluetoothAddress = null, ContainerId = container, Transport = DeviceTransport.Receiver };
         Put(store, 1, 0, receiver);
         Put(store, 1, 0, Observation(0) with { ContainerId = container });
         store.EndScan(1);
@@ -225,7 +227,8 @@ public sealed class DeviceDisplayTests
     public void Unverified_paths_do_not_add_a_connection_method()
     {
         var store = new StateStore();
-        Scan(store, 1, 0, Observation(0, source: "hid.unknown") with { EndpointId = "usb:arbitrary", BluetoothAddress = null });
+        Scan(store, 1, 0, Observation(0, source: "hid.unknown") with
+        { EndpointId = "usb:arbitrary", BluetoothAddress = null, Transport = DeviceTransport.Unknown });
         Assert.Empty(DeviceDisplayMapper.Map(Assert.Single(store.Snapshot(At(0)).Devices))!.Connections);
     }
 
@@ -239,6 +242,43 @@ public sealed class DeviceDisplayTests
         Assert.Equal([DeviceTransport.Bluetooth], DeviceDisplayMapper.DetectedTransports(device));
         Assert.False(device.Visible);
         Assert.Null(DeviceDisplayMapper.Map(device));
+    }
+
+    [Fact]
+    public void Newly_discovered_transport_updates_the_snapshot_without_confirming_connection()
+    {
+        var store = new StateStore();
+        var path = Observation(0, source: "future.receiver", connected: null) with
+        { EndpointId = "opaque-device", BluetoothAddress = null, Transport = DeviceTransport.Unknown };
+        Scan(store, 1, 0, path);
+        var initial = store.Snapshot(At(0));
+        Scan(store, 2, 0, path with { Transport = DeviceTransport.Receiver });
+        var updated = store.Snapshot(At(0));
+        Assert.True(updated.Version > initial.Version);
+        var device = Assert.Single(updated.DetectedDevices);
+        Assert.Equal(DeviceTransport.Receiver, DeviceDisplayMapper.DetectedTransport(device));
+        Assert.Equal(ConnectionState.Pending, device.Connection);
+        Assert.False(device.Visible);
+        Assert.Null(DeviceDisplayMapper.Map(device));
+    }
+
+    [Fact]
+    public void An_attempt_without_transport_metadata_preserves_the_verified_method_and_does_not_renew_connection()
+    {
+        var store = new StateStore();
+        var connected = Observation(0, source: "future.receiver") with
+        { EndpointId = "opaque-device", BluetoothAddress = null, Transport = DeviceTransport.Receiver };
+        Scan(store, 1, 0, connected);
+        Scan(store, 2, 100, connected with
+        {
+            Connected = null, Transport = DeviceTransport.Unknown,
+            ReceivedAt = T0.AddSeconds(100), ReceivedElapsed = TimeSpan.FromSeconds(100),
+            Status = ReadStatus.Timeout, Error = "No response"
+        });
+        var device = Assert.Single(store.Snapshot(At(106)).DetectedDevices);
+        Assert.Equal(DeviceTransport.Receiver, DeviceDisplayMapper.DetectedTransport(device));
+        Assert.Equal(ConnectionState.Pending, device.Connection);
+        Assert.Equal(ConnectionDisplayState.NoResponse, Assert.Single(DeviceDisplayMapper.Map(device)!.Connections).State);
     }
 
     [Fact]
@@ -321,7 +361,7 @@ public sealed class DeviceDisplayTests
     private static DeviceObservation Observation(int seconds, string source = "windows.pnp", bool? connected = true,
         BatterySample? battery = null, ReadStatus status = ReadStatus.Success, string? error = null) =>
         new(BluetoothEndpoint, null, "020000000011", "Sample headphones", DeviceKind.Headphones, source,
-            T0.AddSeconds(seconds), connected, true, battery, status, error, TimeSpan.FromSeconds(seconds));
+            T0.AddSeconds(seconds), connected, true, battery, status, error, TimeSpan.FromSeconds(seconds), DeviceTransport.Bluetooth);
 
     private static void Put(StateStore store, long generation, int seconds, DeviceObservation observation) =>
         store.Apply(generation, new(observation.Source, [observation]), At(seconds));

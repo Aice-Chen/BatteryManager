@@ -21,6 +21,7 @@ public sealed class MchoseBatterySourceTests
         await Scan(new(io, clock), store, clock, 1);
         var device = Assert.Single(store.Snapshot(clock.GetUtcNow()).Devices);
         Assert.Equal("MCHOSE G3 A", device.Name);
+        Assert.Equal(DeviceTransport.Receiver, DeviceDisplayMapper.Map(device)!.Transport);
         Assert.Equal(ConnectionState.Online, device.Connection);
         Assert.Equal(percent, device.BatteryPercent);
         Assert.Equal(BatteryFreshness.Current, device.Freshness);

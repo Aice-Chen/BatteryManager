@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using BatteryManager.Core;
@@ -12,55 +11,22 @@ public sealed class LogitechK380BatterySource : IDeviceSource
     private readonly TimeProvider clock;
     private readonly TimeSpan attemptTimeout;
     private int softwareCounter = RandomNumberGenerator.GetInt32(15);
-    private int active;
+    private readonly HidSourceScan scan;
     public string Name => "LogitechK380Hid";
 
     public LogitechK380BatterySource(IWindowsHidIo? io = null, TimeProvider? clock = null, TimeSpan? attemptTimeout = null)
     {
         this.io = io ?? new WindowsHidIo();
+        scan = new(this.io, SourceId, "K380");
         this.clock = clock ?? TimeProvider.System;
         this.attemptTimeout = attemptTimeout ?? TimeSpan.FromSeconds(2);
         if (this.attemptTimeout <= TimeSpan.Zero || this.attemptTimeout > TimeSpan.FromSeconds(10))
             throw new ArgumentOutOfRangeException(nameof(attemptTimeout));
     }
 
-    public async Task ReadAsync(ScanContext context, Action<SourceBatch> publish, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(publish);
-        if (Interlocked.CompareExchange(ref active, 1, 0) != 0)
-            throw new InvalidOperationException("The previous K380 scan has not physically completed.");
-        try
-        {
-            var inventory = await io.EnumerateAsync(cancellationToken).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            var complete = inventory.Complete && inventory.Errors.Count == 0;
-            if (!complete)
-                publish(new(SourceId, [], Error: inventory.Errors.Count > 0
-                    ? string.Join("; ", inventory.Errors) : "HID enumeration was incomplete.", FailureStatus: ReadStatus.Error));
-            var pairs = PairInterfaces(inventory.Interfaces, publish);
-            var observations = new ConcurrentBag<DeviceObservation>();
-            await Parallel.ForEachAsync(pairs,
-                new ParallelOptions { MaxDegreeOfParallelism = 2, CancellationToken = cancellationToken },
-                async (pair, token) =>
-                {
-                    var observation = await ReadDeviceAsync(pair, publish, token).ConfigureAwait(false);
-                    token.ThrowIfCancellationRequested();
-                    observations.Add(observation);
-                    publish(new(SourceId, [observation]));
-                }).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            // Earlier ping observations already entered the scan's seen set and
-            // connection evidence. Replaying them here could overwrite newer data.
-            if (complete) publish(new(SourceId, observations.ToArray(), Complete: true, Authoritative: true));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (Exception error)
-        {
-            if (!cancellationToken.IsCancellationRequested)
-                publish(new(SourceId, [], Error: Describe(error), FailureStatus: ReadStatus.Error));
-        }
-        finally { Volatile.Write(ref active, 0); }
-    }
+    public Task ReadAsync(ScanContext context, Action<SourceBatch> publish, CancellationToken cancellationToken) =>
+        scan.ReadAsync(devices => PairInterfaces(devices, publish),
+            async (device, token) => await ReadDeviceAsync(device, publish, token).ConfigureAwait(false), publish, cancellationToken);
 
     private static IReadOnlyList<InterfacePair> PairInterfaces(IReadOnlyList<HidInterface> inventory, Action<SourceBatch> publish)
     {
@@ -152,7 +118,7 @@ public sealed class LogitechK380BatterySource : IDeviceSource
                     Charging: false, Precision: capability.Precision, ReadAt: receivedAt.Utc, ReadElapsed: receivedAt.Elapsed));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception error) { return Observation(pair, ClockInstant.Read(clock), ReadStatus.Error, error: Describe(error)); }
+        catch (Exception error) { return Observation(pair, ClockInstant.Read(clock), ReadStatus.Error, error: HidSourceScan.Describe(error)); }
     }
 
     private async Task<HidReportReply?> QueryAsync(IHidChannel shortChannel, IHidChannel longChannel, byte[] request,
@@ -205,8 +171,7 @@ public sealed class LogitechK380BatterySource : IDeviceSource
     private static DeviceObservation Observation(InterfacePair pair, ClockInstant at, ReadStatus status,
         BatterySample? battery = null, string? error = null, bool? connected = null) =>
         new("bt-classic:" + pair.Address, pair.Container, pair.Address, "Keyboard K380", DeviceKind.Keyboard, SourceId, at.Utc,
-            Connected: connected, PathPresent: true, Battery: battery, Status: status, Error: error, ReceivedElapsed: at.Elapsed);
+            Connected: connected, PathPresent: true, Battery: battery, Status: status, Error: error, ReceivedElapsed: at.Elapsed, Transport: DeviceTransport.Bluetooth);
 
-    private static string Describe(Exception error) => $"{error.GetType().Name}: {error.Message} (0x{error.HResult:X8})";
     private sealed record InterfacePair(HidInterface Short, HidInterface Long, string Address, string Container);
 }

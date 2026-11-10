@@ -20,6 +20,7 @@ public sealed class LofreeBatterySourceTests
         Assert.Equal(DeviceKind.Keyboard, device.Kind);
         Assert.Equal(ConnectionState.Online, device.Connection);
         Assert.Equal(85, device.BatteryPercent);
+        Assert.Equal(DeviceTransport.Receiver, DeviceDisplayMapper.Map(device)!.Transport);
         Assert.Equal(BatteryFreshness.Current, device.Freshness);
         Assert.False(Assert.Single(device.Readings).Charging);
         Assert.Equal(new byte[] { 3, 1, 4 }, channel.Writes.Select(x => x[1]));
