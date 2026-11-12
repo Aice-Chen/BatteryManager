@@ -3,6 +3,8 @@ using BatteryManager.Application.Updates;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
@@ -11,7 +13,8 @@ namespace BatteryManager.App;
 internal sealed record ManagementPanelState(string UpdatePhase, string StatusText, bool AutoCheck,
     bool CheckEnabled, bool DownloadVisible, bool InstallVisible, bool Busy,
     string StartupStatus, bool StartupEnabled, string? Error, bool Simulated, bool ConfirmationOpen, bool LocalUpdateFixture = false,
-    bool AutomaticControlEnabled = false, bool CancelControlEnabled = false);
+    bool AutomaticControlEnabled = false, bool CancelControlEnabled = false,
+    string? PrimaryActionText = null, bool PrimaryActionEnabled = false);
 
 // The "通用" and "关于" sections of the settings page. Owns only the controls; HTTP, persistence and
 // registry work live in services. Rows use the settings-card layout of MainWindow.SettingCard.
@@ -123,6 +126,13 @@ internal sealed class ManagementPanel : StackPanel
         if (!_automatic.IsEnabled) throw new InvalidOperationException("Automatic update control is disabled.");
         _automatic.IsOn = enabled;
     }
+    internal void InvokePrimaryForTest()
+    {
+        if (!_simulated && !_localUpdateFixture) throw new InvalidOperationException("Button invocation requires an isolated management test.");
+        // Invoke the real button's automation peer so the Click handler and its current action dispatch run.
+        var peer = new ButtonAutomationPeer(_action);
+        ((IInvokeProvider)peer.GetPattern(PatternInterface.Invoke)).Invoke();
+    }
     public void HideConfirmation() => _confirmation?.Hide();
     public async Task<bool> ConfirmInstallAsync(string version)
     {
@@ -163,7 +173,8 @@ internal sealed class ManagementPanel : StackPanel
         _automatic.IsOn, _next == UpdateAction.Check && _action.IsEnabled, _next == UpdateAction.Download,
         _next == UpdateAction.Install, _update?.IsBusy == true,
         _startupState?.Status.ToString() ?? "Unknown", _startup.IsOn, Errors(), _simulated, _confirmation is not null, _localUpdateFixture,
-        _automatic.IsEnabled, _next == UpdateAction.Cancel && _action.IsEnabled);
+        _automatic.IsEnabled, _next == UpdateAction.Cancel && _action.IsEnabled,
+        _action.Content?.ToString(), _action.IsEnabled);
 
     private void Render()
     {

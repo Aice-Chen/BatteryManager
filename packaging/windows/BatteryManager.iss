@@ -827,7 +827,8 @@ begin
   if not AutoUpdate or not HandoffConfirmedExited or InstallationStarted then Exit;
   if (HandoffDirectory = '') or OtherRegisteredInstallationAt(HandoffDirectory) or not TreeWithoutReparse(HandoffDirectory) or
     not FileExists(AddBackslash(HandoffDirectory) + 'BatteryManager.App.exe') or CheckForMutexes('{#AppMutexName}') then Exit;
-  if Exec(AddBackslash(HandoffDirectory) + 'BatteryManager.App.exe', '--background', HandoffDirectory, SW_SHOWNORMAL, ewNoWait, Code) then
+  { The unchanged original may be 0.3.0, whose argument parser rejects --background. }
+  if Exec(AddBackslash(HandoffDirectory) + 'BatteryManager.App.exe', '', HandoffDirectory, SW_SHOWNORMAL, ewNoWait, Code) then
     Log('Update preflight refused; restarted the unchanged original application.')
   else Log('Update preflight refused; original restart failed: ' + IntToStr(Code));
 end;

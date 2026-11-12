@@ -151,6 +151,8 @@ try {
     if($taskFixture.HasExited -or (Get-FileHash -LiteralPath (Join-Path $taskTarget 'BatteryManager.App.exe')).Hash -cne $taskOriginalHash){throw 'Timeout terminated the process or changed its executable.'}
     Stop-HandoffFixture $taskFixture
     $taskFixture.Dispose();$taskFixture=$null
+    # The unchanged 0.3.0 original rejects --background; recovery must use its supported arguments.
+    Write-PortableText (Join-Path $taskTarget 'fixture.legacy-arguments') '0.3.0 rejects --background'
     # A foreign lock introduced after acceptance must restart the unchanged original after refusal.
     $taskFixture=Start-HandoffFixture
     $handshake=New-ReadyHandshake
@@ -163,10 +165,13 @@ try {
         $taskFixture.Dispose();$taskFixture=$null
         Complete-HandoffInstaller $installer 'late-lock-restores-original' $false
         $timer=[Diagnostics.Stopwatch]::StartNew()
-        while(-not (Test-Path -LiteralPath (Join-Path $taskTarget 'fixture.launches')) -and $timer.Elapsed.TotalSeconds -lt 10){Start-Sleep -Milliseconds 25}
-        if((Get-Content -LiteralPath (Join-Path $taskTarget 'fixture.launches') -Raw) -cne ("original --background"+[Environment]::NewLine) -or
+        while(-not (Test-Path -LiteralPath (Join-Path $taskTarget 'fixture.launches')) -and
+            -not (Test-Path -LiteralPath (Join-Path $taskTarget 'fixture.rejected-background')) -and $timer.Elapsed.TotalSeconds -lt 10){Start-Sleep -Milliseconds 25}
+        if(Test-Path -LiteralPath (Join-Path $taskTarget 'fixture.rejected-background')){throw 'Preflight restarted the older original with unsupported --background.'}
+        if((Get-Content -LiteralPath (Join-Path $taskTarget 'fixture.launches') -Raw) -cne ("original"+[Environment]::NewLine) -or
             (Get-FileHash -LiteralPath (Join-Path $taskTarget 'BatteryManager.App.exe')).Hash -cne $taskOriginalHash){throw 'Late refusal did not restore exactly one unchanged original.'}
     } finally {$lock.Dispose();Close-ReadyHandshake $handshake;$handshake=$null}
+    Remove-Item -LiteralPath (Join-Path $taskTarget 'fixture.legacy-arguments')
     Remove-Item -LiteralPath (Join-Path $taskTarget 'fixture.launches')
     $taskFixture=Start-HandoffFixture
     $installer=Start-HandoffInstaller ([string]$taskFixture.Id) 'wait-then-upgrade'

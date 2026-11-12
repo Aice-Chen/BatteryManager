@@ -16,7 +16,8 @@ internal sealed record MainUiState(string Page, string MainTheme, string? Dialog
     double? TypeListMaxHeight = null, double? TypeListActualHeight = null, double WindowHeight = 0,
     RefreshMotionState? RefreshMotion = null, bool? TypeLastOptionVisible = null,
     bool PreparingInstallation = false, string? SettingsError = null,
-    bool PreferencesEnabled = true, bool AppearanceEnabled = true, bool BackEnabled = true);
+    bool PreferencesEnabled = true, bool AppearanceEnabled = true, bool BackEnabled = true,
+    bool WindowVisible = false);
 
 internal sealed class MainWindow : Window
 {
@@ -702,7 +703,7 @@ internal sealed class MainWindow : Window
         _dialogSaving, _dialogError, _typeInput?.MaxHeight, _typeInput?.ActualHeight,
         _root.XamlRoot?.Size.Height ?? 0, _spin.Capture(), LastTypeOptionVisible(),
         _preparingInstallation, _settingsError.Visibility == Visibility.Visible ? _settingsError.Text : null,
-        TrayPriority.IsEnabled, _colorMode.IsEnabled, _back.IsEnabled);
+        TrayPriority.IsEnabled, _colorMode.IsEnabled, _back.IsEnabled, AppWindow.IsVisible);
     private async Task SaveDialogForTestAsync() { if (await SaveDialogAsync(false)) _dialog?.Hide(); }
     internal void ResizeForTest(int width, int height) => AppWindow.Resize(new(width, height));
     internal FrameworkElement? DialogForTest => _dialog;
