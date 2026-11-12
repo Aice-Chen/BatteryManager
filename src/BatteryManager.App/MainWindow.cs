@@ -189,11 +189,8 @@ internal sealed class MainWindow : Window
             _colorSave = SaveModeAsync(mode); await _colorSave;
         };
         _settingsContent.Children.Add(SettingCard("\uE790", UiText.Get("ColorMode"), _colorMode, UiText.Get("ThemeHint")));
+        // 通用 and 关于: startup, automatic updates, the version and its update action.
         _settingsContent.Children.Add(Management);
-        _settingsContent.Children.Add(SectionTitle("About"));
-        var version = new TextBlock { Text = AppBuildInfo.Version, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextLineBounds = TextLineBounds.Tight };
-        _settingSubTexts.Add(version);
-        _settingsContent.Children.Add(SettingCard("\uE946", "Battery Manager", version, UiText.Get("AboutHint")));
         _settingsContent.Children.Add(_settingsError);
         _settingsPage = new ScrollViewer { Content = _settingsContent, Visibility = Visibility.Collapsed, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Grid.SetRow(_settingsPage, 1); _root.Children.Add(_settingsPage);

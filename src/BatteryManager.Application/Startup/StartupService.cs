@@ -95,24 +95,23 @@ internal sealed class StartupService
             return new(StartupStatus.Disabled, false, true, false, null, false, null, snapshot);
         if (!snapshot.ValueIsString || !StartupCommand.TryParse(snapshot.Command, out var path, out var legacy, out var quoted))
             return new(StartupStatus.Unknown, false, false, false, null, false,
-                "同名启动项包含无法确认的命令，已保留原项。请在 Windows 启动应用中检查。", snapshot);
+                "已有无法识别的同名启动项，未改动", snapshot);
         var current = string.Equals(path, executablePath, StringComparison.OrdinalIgnoreCase);
         if (snapshot.Approval == StartupApproval.Blocked)
             return new(StartupStatus.BlockedByWindows, false, true, true, path, legacy,
-                "Windows 已禁用此启动项。请在 Windows 设置的“应用 → 启动”中启用 Battery Manager。", snapshot);
+                "已在 Windows 启动应用中关闭", snapshot);
         if (snapshot.Approval == StartupApproval.Unknown)
             return new(StartupStatus.Unknown, false, true, true, path, legacy,
-                "启动项已登记，但无法确认 Windows 的启用状态。请在“应用 → 启动”中检查。", snapshot);
+                "无法确认 Windows 是否允许启动", snapshot);
         if (!current || legacy || !quoted)
             return new(StartupStatus.OtherLocation, false, true, true, path, legacy,
-                legacy ? "启动项仍含旧版 --startup 参数。启用后将改为当前程序的启动命令。"
-                    : !quoted ? "启动命令缺少完整引号。启用后将改为当前程序的启动命令。"
-                    : "启动项指向其他位置的 Battery Manager。启用后将改为当前程序。", snapshot);
+                // An old --startup entry, a missing quote or another copy: enabling writes this app's command.
+                "启动项需要更新，打开开关即可", snapshot);
         return new(StartupStatus.Enabled, true, true, true, path, false, null, snapshot);
     }
 
     private static StartupChangeResult ChangedElsewhere(StartupState state) =>
-        new(false, state, "启动项已被其他操作更改，已刷新当前状态；请确认后重试。", Conflict: true);
+        new(false, state, "启动项刚被其他程序改动，请重试", Conflict: true);
 
     private static StartupState Unavailable(Exception error) =>
         new(StartupStatus.Error, false, false, false, null, false, $"无法读取开机启动状态：{error.Message}", null);
