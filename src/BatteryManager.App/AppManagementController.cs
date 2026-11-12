@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BatteryManager.Application.Management;
+using BatteryManager.Application.Installation;
 using BatteryManager.Application.Startup;
 using BatteryManager.Application.Updates;
 using BatteryManager.App.Platform;
@@ -16,20 +17,24 @@ internal sealed class AppManagementController : IAsyncDisposable
     private readonly StartupService startup;
     private readonly ManagementSimulation? simulation;
     private readonly bool localUpdateFixture;
-    private readonly Func<UpdatePackage, string, bool, Task> install;
+    private readonly Func<UpdateCoordinator.InstallationLease, bool, Task> install;
+    private readonly AppDataPaths paths;
+    private readonly Action<string>? recordCacheCleanup;
     private readonly CancellationTokenSource lifetime = new();
     private StartupState startupState;
     private Task automaticLoop = Task.CompletedTask;
+    private Task cacheCleanup = Task.CompletedTask;
     private string? actionError;
     private bool stopping;
     private Task? stopTask;
     private bool installing;
 
     public AppManagementController(MainWindow window, AppDataPaths paths, bool simulated,
-        Func<UpdatePackage, string, bool, Task> install,
-        bool testMode = false, LocalUpdateFixture? updateFixture = null, Action<string, int>? recordFixtureResponse = null)
+        Func<UpdateCoordinator.InstallationLease, bool, Task> install,
+        bool testMode = false, LocalUpdateFixture? updateFixture = null, Action<string, int>? recordFixtureResponse = null,
+        Action<string>? recordCacheCleanup = null)
     {
-        this.window = window; this.install = install;
+        this.window = window; this.install = install; this.paths = paths; this.recordCacheCleanup = recordCacheCleanup;
         if (updateFixture is not null && (!testMode || simulated)) throw new ArgumentException("A local update fixture requires a real-data test-pipe session.");
         localUpdateFixture = updateFixture is not null;
         simulation = simulated ? new() : null;
@@ -49,7 +54,26 @@ internal sealed class AppManagementController : IAsyncDisposable
         window.Management.OpenSystemStartup = OpenSystemStartup;
         Render();
     }
-    public void Start() { if (simulation is null) automaticLoop = AutomaticChecksAsync(); }
+    public void Start()
+    {
+        // Local fixtures are driven explicitly; developer/scenario runs never self-install.
+        if (simulation is null && paths.IsInstalled && !localUpdateFixture)
+        {
+            cacheCleanup = CleanupCacheAsync();
+            automaticLoop = AutomaticChecksAsync();
+        }
+    }
+    private async Task CleanupCacheAsync()
+    {
+        try
+        {
+            var result = await UpdateCache.CleanupAsync(paths.UpdatesDirectory, AppBuildInfo.Version, lifetime.Token);
+            if (result.Error is not null || result.RemainingFiles.Count > 0)
+                recordCacheCleanup?.Invoke($"Remaining: {string.Join(", ", result.RemainingFiles)}; {result.Error}");
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception error) { recordCacheCleanup?.Invoke(error.Message); }
+    }
     public void RefreshStartup() { if (!stopping) { startupState = startup.Read(); Render(); } }
     private async Task CheckAsync() { SetResult(await updates.CheckAsync()); Render(); }
     private async Task DownloadAsync()
@@ -64,35 +88,47 @@ internal sealed class AppManagementController : IAsyncDisposable
         var result = startup.SetEnabled(enabled, startupState);
         startupState = result.State; actionError = result.Error; Render(); return Task.CompletedTask;
     }
-    private async Task InstallAsync(bool confirmedForTest)
+    private async Task InstallAsync(bool confirmedForTest, bool automatic = false)
     {
-        if (!window.CanManageApplication || stopping || installing) return;
+        if ((automatic ? !window.CanUpdateAutomatically : !window.CanManageApplication) || stopping || installing) return;
         var snapshot = updates.Snapshot;
         if (snapshot.Phase != UpdatePhase.Downloaded || snapshot.SelectedPackage is not { Kind: UpdatePackageKind.Installer } package || snapshot.DownloadedFile is not { } file)
             return;
         if (confirmedForTest && simulation is null && !localUpdateFixture)
             throw new InvalidOperationException("Confirmation injection requires a fictional scenario or an explicit local update fixture.");
-        if (!confirmedForTest && !await window.Management.ConfirmInstallAsync(package.Version)) return;
+        if (!automatic && !confirmedForTest && !await window.Management.ConfirmInstallAsync(package.Version)) return;
         var current = updates.Snapshot;
-        if (!window.CanManageApplication || stopping || current.Phase != UpdatePhase.Downloaded ||
+        if ((automatic ? !window.CanUpdateAutomatically : !window.CanManageApplication) || stopping || current.Phase != UpdatePhase.Downloaded ||
             current.SelectedPackage != package || current.DownloadedFile != file) return;
+        await using var preparation = updates.TryPrepareInstallation(automatic);
+        if (preparation is null) return;
         installing = true; window.Management.SetPreparingInstallation(true);
-        try { await install(package, file, simulation is not null); }
+        try { await install(preparation, simulation is not null); }
+        catch (OperationCanceledException) when (preparation.Token.IsCancellationRequested) { }
         catch (Exception error) { actionError = error.Message; Render(); }
         finally { installing = false; if (!stopping) window.Management.SetPreparingInstallation(false); }
     }
-    private async Task AutomaticChecksAsync()
+    private async Task AutomaticChecksAsync(TimeSpan? startupDelay = null)
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
+            await Task.Delay(startupDelay ?? TimeSpan.FromSeconds(30), lifetime.Token);
             while (!lifetime.IsCancellationRequested)
             {
-                if (updates.ShouldCheckAutomatically()) await updates.CheckAsync(automatic: true, lifetime.Token);
+                await RunAutomaticOnceAsync();
                 await Task.Delay(TimeSpan.FromHours(1), lifetime.Token);
             }
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+    }
+    private async Task RunAutomaticOnceAsync()
+    {
+        if (stopping || installing || !window.CanUpdateAutomatically || !updates.ShouldCheckAutomatically()) return;
+        SetResult(await updates.CheckAsync(automatic: true, lifetime.Token));
+        Render();
+        // Installation stops this controller. It must not be a child awaited by automaticLoop.
+        if (!stopping && updates.Snapshot.Phase == UpdatePhase.Downloaded)
+            _ = InstallAsync(confirmedForTest: false, automatic: true);
     }
     private void UpdateChanged(UpdateSnapshot snapshot)
     {
@@ -120,6 +156,12 @@ internal sealed class AppManagementController : IAsyncDisposable
             case "management-download-start": _ = DownloadAsync(); break;
             case "management-cancel": await updates.CancelCurrentAsync(); Render(); break;
             case "management-auto": SetResult(await updates.SetAutomaticChecksAsync(value == "on")); Render(); break;
+            case "management-auto-toggle": window.Management.ToggleAutomaticForTest(value == "on"); break;
+            case "management-auto-run": await RunAutomaticOnceAsync(); break;
+            case "management-auto-run-start": _ = RunAutomaticOnceAsync(); break;
+            case "management-auto-loop-start":
+                if (!automaticLoop.IsCompleted) throw new InvalidOperationException("The automatic update loop is already running.");
+                automaticLoop = AutomaticChecksAsync(TimeSpan.Zero); break;
             case "management-startup":
                 if (simulation is null) throw new InvalidOperationException("Startup test changes require a fictional scenario.");
                 await ChangeStartupAsync(value == "on"); break;
@@ -140,7 +182,7 @@ internal sealed class AppManagementController : IAsyncDisposable
     {
         stopping = true; updates.Changed -= UpdateChanged; window.Management.Stop();
         await lifetime.CancelAsync();
-        await updates.CancelAndDrainAsync(); await automaticLoop;
+        await updates.CancelAndDrainAsync(); await automaticLoop; await cacheCleanup;
         (client as IDisposable)?.Dispose(); lifetime.Dispose();
     }
     public ValueTask DisposeAsync() => new(StopAsync());

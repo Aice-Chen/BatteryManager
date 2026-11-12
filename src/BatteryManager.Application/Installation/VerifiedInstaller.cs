@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using BatteryManager.Application.Updates;
 
 namespace BatteryManager.Application.Installation;
@@ -11,6 +12,27 @@ internal sealed class VerifiedInstaller : IDisposable
     private FileStream? lease;
     private VerifiedInstaller(string path, FileStream lease) { Path = path; this.lease = lease; }
     public string Path { get; }
+
+    public static ProcessStartInfo CreateStartInfo(string path, string appDirectory, int processId,
+        bool automatic, string? fixtureLog = null, string? waitToken = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(processId, 1);
+        if (automatic && (waitToken is null || waitToken.Length != 32 || waitToken.Any(c => c is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))))
+            throw new ArgumentException("Automatic installation requires its exact handoff token.", nameof(waitToken));
+        if (!automatic && waitToken is not null) throw new ArgumentException("A handoff token requires automatic installation.", nameof(waitToken));
+        var start = new ProcessStartInfo(path) { UseShellExecute = true };
+        start.ArgumentList.Add("/CURRENTUSER"); start.ArgumentList.Add("/NORESTART");
+        start.ArgumentList.Add("/NOCLOSEAPPLICATIONS");
+        start.ArgumentList.Add("/WAITPID=" + processId);
+        start.ArgumentList.Add("/DIR=" + appDirectory);
+        if (automatic) { start.ArgumentList.Add("/AUTOUPDATE=1"); start.ArgumentList.Add("/WAITTOKEN=" + waitToken); }
+        if (automatic || fixtureLog is not null)
+        {
+            start.ArgumentList.Add("/VERYSILENT"); start.ArgumentList.Add("/SUPPRESSMSGBOXES"); start.ArgumentList.Add("/SP-");
+        }
+        if (fixtureLog is not null) start.ArgumentList.Add("/LOG=" + fixtureLog);
+        return start;
+    }
 
     public static async Task<VerifiedInstaller> OpenAsync(string path, string cacheDirectory, UpdatePackage package,
         CancellationToken token = default)

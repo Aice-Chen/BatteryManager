@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BatteryManager.Application.Updates;
+using BatteryManager.Application.Management;
+using BatteryManager.Application.Installation;
 using Xunit;
 
 namespace BatteryManager.Application.Tests;
@@ -63,6 +65,39 @@ public sealed class ReleaseUpdateClientTests
         Assert.Equal(payload, await File.ReadAllBytesAsync(path));
         Assert.Single(Directory.GetFiles(directory.Path));
         Assert.Equal(3, requests.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Automatic_pipeline_uses_real_download_integrity_and_installer_lease(bool corrupt)
+    {
+        byte[] payload = [1, 2, 3, 4]; // Inert fixture bytes, never executed.
+        var fixture = Fixture(payload);
+        using var client = new ReleaseUpdateClient(new Handler(request =>
+            request.RequestUri!.Host == "api.github.com" ? Json(fixture.Release)
+            : request.RequestUri.AbsolutePath.EndsWith("update-manifest.json", StringComparison.Ordinal) ? Bytes(fixture.Manifest)
+            : Bytes(corrupt ? [4, 3, 2, 1] : payload)));
+        using var directory = new ScratchDirectory();
+        var cache = Path.Combine(directory.Path, "updates");
+        await using var coordinator = new UpdateCoordinator("0.1.0", cache, client,
+            new ManagementStore(Path.Combine(directory.Path, "management.json")));
+        var result = await coordinator.CheckAsync(automatic: true);
+        if (corrupt)
+        {
+            Assert.Equal(UpdateOperationOutcome.Failed, result.Outcome);
+            Assert.Null(coordinator.TryPrepareInstallation(automatic: true));
+            Assert.Empty(Directory.EnumerateFiles(cache));
+        }
+        else
+        {
+            Assert.True(result.Success);
+            await using var preparation = coordinator.TryPrepareInstallation(automatic: true);
+            Assert.NotNull(preparation);
+            using var verified = await VerifiedInstaller.OpenAsync(preparation.File, cache, preparation.Package, preparation.Token);
+            Assert.Equal(payload, await File.ReadAllBytesAsync(verified.Path));
+            Assert.True(preparation.TryCommit());
+        }
     }
 
     [Theory]

@@ -6,9 +6,11 @@ namespace BatteryManager.App;
 internal sealed class SingleInstance : IDisposable
 {
     private const string WindowMarker = "BatteryManager.NewApp.PrimaryWindow.2026";
+    private const string AnyWindowMarker = "BatteryManager.NewApp.ExactProcessWindow.2026";
     private const nuint SubclassId = 42;
     private readonly Mutex _mutex;
     private readonly NativeMethods.SubclassProc _procedure;
+    private readonly string _windowMarker;
     private nint _window;
     private bool _disposed;
     public bool IsPrimary { get; }
@@ -16,10 +18,11 @@ internal sealed class SingleInstance : IDisposable
     public static uint ActivateMessage { get; } = NativeMethods.RegisterWindowMessage("BatteryManager.NewApp.Activate.2026");
     private static uint QuitMessage { get; } = NativeMethods.RegisterWindowMessage("BatteryManager.NewApp.Quit.2026");
 
-    public SingleInstance()
+    public SingleInstance(string? scenarioScope = null)
     {
         _procedure = WindowProcedure;
-        _mutex = new Mutex(true, @"Local\BatteryManager.NewApp.2026", out bool created);
+        _windowMarker = MarkerFor(scenarioScope);
+        _mutex = new Mutex(true, @"Local\BatteryManager.NewApp.2026" + ScopeSuffix(scenarioScope), out bool created);
         IsPrimary = created;
     }
 
@@ -28,22 +31,28 @@ internal sealed class SingleInstance : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!IsPrimary || window == 0 || _window != 0)
             throw new InvalidOperationException("Only the primary instance can attach one activation window.");
-        if (!SetProp(window, WindowMarker, Environment.ProcessId))
+        if (!SetProp(window, _windowMarker, Environment.ProcessId))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not mark the application window.");
+        if (!SetProp(window, AnyWindowMarker, Environment.ProcessId))
+        {
+            var error = Marshal.GetLastWin32Error();
+            RemoveProp(window, _windowMarker);
+            throw new Win32Exception(error, "Could not mark the exact-process window.");
+        }
         if (!NativeMethods.SetWindowSubclass(window, _procedure, SubclassId, 0))
         {
             var error = Marshal.GetLastWin32Error();
-            RemoveProp(window, WindowMarker);
+            RemoveProp(window, _windowMarker); RemoveProp(window, AnyWindowMarker);
             throw new Win32Exception(error, "Could not attach window-marker cleanup.");
         }
         _window = window;
     }
 
-    public static async Task ActivateExistingAsync()
+    public static async Task ActivateExistingAsync(string? scenarioScope = null)
     {
         for (int attempt = 0; attempt < 30; attempt++)
         {
-            nint window = FindPrimaryWindow();
+            nint window = FindPrimaryWindow(markerName: MarkerFor(scenarioScope));
             if (window != 0)
             {
                 NativeMethods.GetWindowThreadProcessId(window, out uint processId);
@@ -71,7 +80,7 @@ internal sealed class SingleInstance : IDisposable
         _disposed = true;
         if (_window != 0)
         {
-            RemoveProp(_window, WindowMarker);
+            RemoveProp(_window, _windowMarker); RemoveProp(_window, AnyWindowMarker);
             NativeMethods.RemoveWindowSubclass(_window, _procedure, SubclassId);
             _window = 0;
         }
@@ -80,12 +89,16 @@ internal sealed class SingleInstance : IDisposable
         GC.KeepAlive(_procedure);
     }
 
-    private static nint FindPrimaryWindow(uint? expectedProcessId = null)
+    private static string ScopeSuffix(string? scope) => scope is null ? "" : ".Scenario." +
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(scope)));
+    private static string MarkerFor(string? scope) => WindowMarker + ScopeSuffix(scope);
+    private static nint FindPrimaryWindow(uint? expectedProcessId = null, string markerName = WindowMarker)
     {
         nint found = 0;
         EnumWindows((window, _) =>
         {
-            nint marker = GetProp(window, WindowMarker);
+            nint marker = expectedProcessId is null ? GetProp(window, markerName) : GetProp(window, AnyWindowMarker);
+            if (marker == 0 && expectedProcessId is not null) marker = GetProp(window, WindowMarker); // Existing released builds.
             if (marker == 0) return true;
             NativeMethods.GetWindowThreadProcessId(window, out uint processId);
             if (processId == 0 || marker != (nint)processId) return true;
@@ -106,7 +119,7 @@ internal sealed class SingleInstance : IDisposable
         }
         if (message == 0x0082) // WM_NCDESTROY: remove our property before the window is destroyed.
         {
-            RemoveProp(window, WindowMarker);
+            RemoveProp(window, _windowMarker); RemoveProp(window, AnyWindowMarker);
             NativeMethods.RemoveWindowSubclass(window, _procedure, SubclassId);
             _window = 0;
         }

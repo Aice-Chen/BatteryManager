@@ -28,6 +28,7 @@ public partial class App : Microsoft.UI.Xaml.Application
     private Task<string?>? _installationPreflight;
     private bool _preparingInstallation;
     private Task<VerifiedInstaller>? _installerVerification;
+    private Task? _installerAcceptance;
     private CancellationTokenSource? _installerVerificationCancellation;
     private static string _logDirectory = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
     private IReadOnlyList<TrayPreference> _priorities = [];
@@ -89,10 +90,11 @@ public partial class App : Microsoft.UI.Xaml.Application
             Exit();
             return;
         }
-        _instance = new SingleInstance();
+        var scenarioScope = scenarioName is not null ? testPipe : null;
+        _instance = new SingleInstance(scenarioScope);
         if (!_instance.IsPrimary)
         {
-            await SingleInstance.ActivateExistingAsync();
+            await SingleInstance.ActivateExistingAsync(scenarioScope);
             _instance.Dispose();
             Exit();
             return;
@@ -170,7 +172,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         _management = new AppManagementController(_window,
             _dataPaths ?? AppDataPaths.Parse(AppContext.BaseDirectory, AppContext.BaseDirectory, null),
             _scenarios is not null, RequestInstallationAsync, testPipe is not null, _updateFixture,
-            (url, status) => _diagnostics?.Record("update-fixture-response", new { url, status, networkAccessed = false }));
+            (url, status) => _diagnostics?.Record("update-fixture-response", new { url, status, networkAccessed = false }),
+            message => _diagnostics?.Record("update-cache-cleanup", new { message }));
         _window.ManagementOpened = _management.RefreshStartup;
         _window.Activated += (_, _) => { if (_window.CanManageApplication) _management?.RefreshStartup(); };
         // Tray priority is edited in place on the settings page and saved on every change.
@@ -254,7 +257,7 @@ public partial class App : Microsoft.UI.Xaml.Application
     // The tray menu's "托盘设置" and the settings entry open the settings page at the tray priority.
     private void OpenTrayPreferences()
     {
-        if (_quitting || _preparingInstallation || _window is null || _session is null) return;
+        if (_quitting || _window is null || _session is null) return;
         _window.ShowWindow();
         _window.ShowTrayPriority();
     }
@@ -411,21 +414,23 @@ public partial class App : Microsoft.UI.Xaml.Application
     }
 
     private Task QuitAsync() => QuitCoreAsync(null, false);
-    private async Task RequestInstallationAsync(UpdatePackage package, string file, bool simulated)
+    private async Task RequestInstallationAsync(UpdateCoordinator.InstallationLease preparation, bool simulated)
     {
         if (_quitting || _preparingInstallation) return;
         if (simulated && _scenarios is null) throw new InvalidOperationException("Simulated installation requires a scenario.");
         if (!simulated && _dataPaths?.IsInstalled != true) throw new InvalidOperationException("开发运行目录不支持安装更新，请从安装版操作。");
+        preparation.Token.ThrowIfCancellationRequested();
         _preparingInstallation = true;
         _window!.SetInstallationPreparing(true);
         try
         {
             // Freeze new edits, but let the priority panel commit every draft already accepted.
             // This task deliberately excludes QuitCoreAsync, so an ordinary quit can wait for it.
-            _diagnostics?.Record("installation-preflight-started", new { simulated });
+            _diagnostics?.Record("installation-preflight-started", new { simulated, automatic = preparation.Automatic });
             _installationPreflight = FlushPreferencesForInstallationAsync();
             var saveError = await _installationPreflight;
             if (_quitting) return;
+            preparation.Token.ThrowIfCancellationRequested();
             if (saveError is not null)
             {
                 _diagnostics?.Record("installation-preflight-failed", new { simulated, error = saveError });
@@ -433,18 +438,30 @@ public partial class App : Microsoft.UI.Xaml.Application
                 return;
             }
             _diagnostics?.Record("installation-preflight-completed", new { simulated });
-            if (simulated) { await QuitCoreAsync(null, true); return; }
-            using var cancellation = new CancellationTokenSource();
+            if (simulated) { if (preparation.TryCommit()) await QuitCoreAsync(null, true); return; }
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(preparation.Token);
             _installerVerificationCancellation = cancellation;
-            _installerVerification = VerifiedInstaller.OpenAsync(file, _dataPaths!.UpdatesDirectory, package, cancellation.Token);
+            _installerVerification = VerifiedInstaller.OpenAsync(preparation.File, _dataPaths!.UpdatesDirectory, preparation.Package, cancellation.Token);
             using var verified = await _installerVerification;
-            if (!_quitting) await QuitCoreAsync(verified, false);
+            if (_quitting) return;
+            if (preparation.Automatic)
+            {
+                using var handoff = new InstallerHandoff();
+                using var process = LaunchInstaller(verified, automatic: true, physicallyDrained: false, handoff.Token);
+                _installerAcceptance = handoff.WaitForAcceptanceAsync(() => process.HasExited, preparation.Token);
+                await _installerAcceptance;
+                if (_quitting || !preparation.TryCommit()) return;
+                _diagnostics?.Record("installer-accepted", new { automatic = true, processId = process.Id });
+                await QuitCoreAsync(verified, false, handoff);
+            }
+            else if (preparation.TryCommit()) await QuitCoreAsync(verified, false);
         }
         catch (OperationCanceledException) when (_quitting) { }
         finally
         {
             _installationPreflight = null;
             _installerVerification = null;
+            _installerAcceptance = null;
             _installerVerificationCancellation = null;
             _preparingInstallation = false;
             if (!_quitting) _window.SetInstallationPreparing(false);
@@ -474,7 +491,21 @@ public partial class App : Microsoft.UI.Xaml.Application
             return UiText.Get("SaveFailed");
         }
     }
-    private async Task QuitCoreAsync(VerifiedInstaller? installer, bool simulatedInstallation)
+    private System.Diagnostics.Process LaunchInstaller(VerifiedInstaller installer, bool automatic, bool physicallyDrained, string? waitToken = null)
+    {
+        System.Diagnostics.Process? process = null;
+        installer.Launch(path =>
+        {
+            var start = VerifiedInstaller.CreateStartInfo(path, _dataPaths!.AppDirectory, Environment.ProcessId,
+                automatic, _updateFixture?.InstallerLogPath, waitToken);
+            process = System.Diagnostics.Process.Start(start)
+                ?? throw new InvalidOperationException("安装程序未能启动。");
+            _diagnostics?.Record("installer-launch", new { simulated = false, automatic, physicallyDrained,
+                processId = process.Id, file = path, localUpdateFixture = _updateFixture is not null });
+        });
+        return process!;
+    }
+    private async Task QuitCoreAsync(VerifiedInstaller? installer, bool simulatedInstallation, InstallerHandoff? handoff = null)
     {
         if (_quitting) return;
         _quitting = true;
@@ -495,6 +526,11 @@ public partial class App : Microsoft.UI.Xaml.Application
                 catch (Exception error) { RecordCrash(error, "Installer verification canceled during exit"); }
             }
             if (_management is not null) await _management.StopAsync();
+            if (handoff is null && _installerAcceptance is { } acceptance)
+            {
+                try { await acceptance; }
+                catch (Exception error) { RecordCrash(error, "Installer acceptance canceled during exit"); }
+            }
             if (_testHost is not null)
             {
                 try { await _testHost.StopAsync(); }
@@ -512,30 +548,23 @@ public partial class App : Microsoft.UI.Xaml.Application
             _diagnostics?.Record("session-stopped", new { physicallyDrained = true });
             if (simulatedInstallation)
                 _diagnostics?.Record("installer-launch", new { simulated = true, physicallyDrained = true });
+            else if (handoff is not null)
+            {
+                handoff.SignalReady();
+                _diagnostics?.Record("installer-ready", new { automatic = true, physicallyDrained = true });
+            }
             else if (installer is not null)
-                installer.Launch(path =>
-                {
-                    var start = new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true };
-                    start.ArgumentList.Add("/CURRENTUSER"); start.ArgumentList.Add("/NORESTART");
-                    start.ArgumentList.Add("/NOCLOSEAPPLICATIONS");
-                    start.ArgumentList.Add("/WAITPID=" + Environment.ProcessId);
-                    start.ArgumentList.Add("/DIR=" + _dataPaths!.AppDirectory);
-                    if (_updateFixture is not null)
-                    {
-                        start.ArgumentList.Add("/VERYSILENT"); start.ArgumentList.Add("/SUPPRESSMSGBOXES"); start.ArgumentList.Add("/SP-");
-                        start.ArgumentList.Add("/LOG=" + _updateFixture.InstallerLogPath);
-                    }
-                    using var process = System.Diagnostics.Process.Start(start)
-                        ?? throw new InvalidOperationException("安装程序未能启动。");
-                    _diagnostics?.Record("installer-launch", new { simulated = false, physicallyDrained = true,
-                        processId = process.Id, file = path, localUpdateFixture = _updateFixture is not null });
-                });
+                LaunchInstaller(installer, automatic: false, physicallyDrained: true).Dispose();
         }
         catch (Exception error)
         {
             RecordCrash(error, "Shutdown or installation handoff failed");
             if (installer is not null)
+            {
+                handoff?.Cancel();
+                _window!.ShowWindow();
                 await _window!.Management.ShowInstallErrorAsync(error.Message);
+            }
         }
         finally
         {

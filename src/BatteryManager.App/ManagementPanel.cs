@@ -10,7 +10,8 @@ namespace BatteryManager.App;
 
 internal sealed record ManagementPanelState(string UpdatePhase, string StatusText, bool AutoCheck,
     bool CheckEnabled, bool DownloadVisible, bool InstallVisible, bool Busy,
-    string StartupStatus, bool StartupEnabled, string? Error, bool Simulated, bool ConfirmationOpen, bool LocalUpdateFixture = false);
+    string StartupStatus, bool StartupEnabled, string? Error, bool Simulated, bool ConfirmationOpen, bool LocalUpdateFixture = false,
+    bool AutomaticControlEnabled = false, bool CancelControlEnabled = false);
 
 // Owns only the settings controls. HTTP, persistence and registry work live in services.
 internal sealed class ManagementPanel : StackPanel
@@ -56,13 +57,13 @@ internal sealed class ManagementPanel : StackPanel
         heading.FontSize = 14; heading.FontWeight = FontWeights.SemiBold; heading.Margin = new(1, 24, 0, 4);
         _labels.Add(heading); Children.Add(heading);
         AutomationProperties.SetName(_startup, UiText.Pick("登录 Windows 时启动", "Start when I sign in"));
-        AutomationProperties.SetName(_automatic, UiText.Pick("自动检查更新", "Check for updates automatically"));
+        AutomationProperties.SetName(_automatic, UiText.Pick("自动更新", "Automatic updates"));
         var startupActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         startupActions.Children.Add(_removeStartup); startupActions.Children.Add(_systemStartup);
         var startupBody = new StackPanel { Spacing = 8 }; startupBody.Children.Add(_startupHint); startupBody.Children.Add(startupActions);
         Children.Add(Card(UiText.Pick("登录 Windows 时启动", "Start when I sign in"), _startup, startupBody));
-        var hint = Text(); hint.Text = UiText.Pick("每天检查一次；下载和安装由你确认。", "Checks daily. You choose when to download and install.");
-        Children.Add(Card(UiText.Pick("自动检查更新", "Check for updates automatically"), _automatic, hint));
+        var hint = Text(); hint.Text = UiText.Pick("每天检查正式版本，自动下载、校验、安装并重新启动。关闭后可手动更新。", "Checks stable releases daily, then downloads, verifies, installs and restarts automatically. Turn off to update manually.");
+        Children.Add(Card(UiText.Pick("自动更新", "Automatic updates"), _automatic, hint));
         var body = new StackPanel { Spacing = 8 };
         body.Children.Add(_status); body.Children.Add(_lastCheck);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -110,6 +111,11 @@ internal sealed class ManagementPanel : StackPanel
         Render();
     }
     public void SetPreparingInstallation(bool value) { _preparingInstallation = value; Render(); }
+    internal void ToggleAutomaticForTest(bool enabled)
+    {
+        if (!_automatic.IsEnabled) throw new InvalidOperationException("Automatic update control is disabled.");
+        _automatic.IsOn = enabled;
+    }
     public void HideConfirmation() => _confirmation?.Hide();
     public async Task<bool> ConfirmInstallAsync(string version)
     {
@@ -147,7 +153,8 @@ internal sealed class ManagementPanel : StackPanel
     public ManagementPanelState Capture() => new(_update?.Phase.ToString() ?? "Idle", _status.Text,
         _automatic.IsOn, _check.IsEnabled, _download.Visibility == Visibility.Visible,
         _install.Visibility == Visibility.Visible, _update?.IsBusy == true,
-        _startupState?.Status.ToString() ?? "Unknown", _startup.IsOn, _error.Text, _simulated, _confirmation is not null, _localUpdateFixture);
+        _startupState?.Status.ToString() ?? "Unknown", _startup.IsOn, _error.Text, _simulated, _confirmation is not null, _localUpdateFixture,
+        _automatic.IsEnabled, _cancel.IsEnabled && _cancel.Visibility == Visibility.Visible);
 
     private void Render()
     {
@@ -172,6 +179,7 @@ internal sealed class ManagementPanel : StackPanel
                 UpdatePhase.Available => UiText.Pick($"发现新版本 {update.Available?.Version}", $"Version {update.Available?.Version} is available"),
                 UpdatePhase.Downloading => UiText.Pick($"正在下载：{update.DownloadedBytes / 1048576d:F1} MB", $"Downloading: {update.DownloadedBytes / 1048576d:F1} MB"),
                 UpdatePhase.Downloaded => UiText.Pick("下载已校验，可以安装。", "Download verified. Ready to install."),
+                UpdatePhase.PreparingInstallation => UiText.Pick("正在准备安装更新…", "Preparing to install the update…"),
                 UpdatePhase.Canceled => UiText.Pick("已取消。", "Canceled."),
                 UpdatePhase.Cancelling => UiText.Pick("正在取消…", "Canceling…"),
                 UpdatePhase.Failed => UiText.Pick("更新操作未完成，可以重试。", "The update operation did not finish. You can retry."),
