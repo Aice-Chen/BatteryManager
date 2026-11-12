@@ -27,7 +27,7 @@ internal sealed record AppTestPanel(bool Visible, string Theme, int RowCount, IR
     int NativeBorderColorQueryResult = 0, uint RequestedBorderColor = 0,
     bool FrameSubclassAttached = false, bool FrameChangeApplied = false, int? FrameChangeError = null,
     RefreshMotionState? RefreshMotion = null, double ContentOffsetY = 0, double ContentOpacity = 1,
-    IReadOnlyList<PanelActivationEvent>? ActivationEvents = null);
+    IReadOnlyList<PanelActivationEvent>? ActivationEvents = null, bool ToolWindow = false);
 
 internal sealed record PanelActivationEvent(string Event, int Opening, double ElapsedMilliseconds,
     bool PanelVisible, bool ForegroundIsPanel, bool ForegroundIsThisProcess,
@@ -97,6 +97,7 @@ internal sealed class TrayPanel : Window
         presenter.IsAlwaysOnTop = true;
         AppWindow.SetPresenter(presenter);
         AppWindow.IsShownInSwitchers = false;
+        EnsureToolWindow();
         // The borderless presenter still leaves a thin native frame (measured 6 px at 150%), and Windows
         // paints its inner edge light: that is the bright outline around the panel. Make the client area
         // cover the whole window, so XAML content reaches every edge. DWM keeps the rounded corners,
@@ -243,6 +244,7 @@ internal sealed class TrayPanel : Window
         if (!_renderSubscribed) { CompositionTarget.Rendering += OnRendering; _renderSubscribed = true; }
         _root.Opacity = 0;
         RecordActivation("BeforeShow");
+        EnsureToolWindow();
         AppWindow.Show();
         RecordActivation("AfterShow");
         Activate();
@@ -430,7 +432,19 @@ internal sealed class TrayPanel : Window
             NativeBorderColorQueryResult: borderResult, RequestedBorderColor: _requestedBorderColor,
             FrameSubclassAttached: _frameRemoved, FrameChangeApplied: _frameChangeApplied, FrameChangeError: _frameChangeError,
             RefreshMotion: _refreshSpin.Capture(), ContentOffsetY: _rise.Y, ContentOpacity: _root.Opacity,
-            ActivationEvents: _recordActivation ? _activationEvents.ToArray() : []);
+            ActivationEvents: _recordActivation ? _activationEvents.ToArray() : [],
+            ToolWindow: (PanelNative.GetWindowLongPtr(_handle, PanelNative.GwlExStyle) & PanelNative.WsExToolWindow) != 0);
+    }
+
+    // The panel is a flyout, not an app window. Like the shell's own flyouts it carries WS_EX_TOOLWINDOW: programs that
+    // react to "a window is open" skip tool windows (TranslucentTB's visible-window rule, for one, so opening the panel
+    // no longer turns a transparent taskbar opaque), and the panel stays out of the taskbar and Alt+Tab.
+    // IsShownInSwitchers alone does not set this style. Checked again before each show in case the window was restyled.
+    private void EnsureToolWindow()
+    {
+        var style = PanelNative.GetWindowLongPtr(_handle, PanelNative.GwlExStyle);
+        var wanted = (style | PanelNative.WsExToolWindow) & ~PanelNative.WsExAppWindow;
+        if (wanted != style) PanelNative.SetWindowLongPtr(_handle, PanelNative.GwlExStyle, wanted);
     }
     public void CloseForExit()
     {
@@ -564,6 +578,10 @@ internal static class PanelNative
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetMonitorInfoW")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetMonitorInfo(nint monitor, ref MonitorInfo info);
     [DllImport("shcore.dll")] internal static extern int GetDpiForMonitor(nint monitor, int type, out uint x, out uint y);
     internal const uint SwpNoSize = 0x0001, SwpNoMove = 0x0002, SwpNoZOrder = 0x0004, SwpNoActivate = 0x0010, SwpFrameChanged = 0x0020;
+    internal const int GwlExStyle = -20;
+    internal const nint WsExToolWindow = 0x00000080, WsExAppWindow = 0x00040000;
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] internal static extern nint GetWindowLongPtr(nint window, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] internal static extern nint SetWindowLongPtr(nint window, int index, nint value);
     [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetWindowPos(nint window, nint insertAfter, int x, int y, int width, int height, uint flags);
 }
