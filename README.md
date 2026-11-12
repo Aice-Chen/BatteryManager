@@ -4,7 +4,7 @@ Windows 11 x64 外设电量与状态管理程序，使用 C# / .NET 10 / WinUI 3
 
 ## 当前版本
 
-当前源码版本为 `0.3.0`，统一提供 Windows 11 x64 安装版，原 `0.1.0` 便携版停止维护。本版新增可关闭的全自动更新、升级旧文件清理及卸载个人数据清理，见 [0.3.0 发布说明](docs/releases/0.3.0/发布说明.md)。已公开版本以 [GitHub Releases](https://github.com/Aice-Chen/BatteryManager/releases/latest) 为准。
+当前源码版本为 `0.3.1`，统一提供 Windows 11 x64 安装版，原 `0.1.0` 便携版停止维护。本版改进托盘面板、登录与自动更新后的启动方式，以及设置页的更新操作，见 [0.3.1 发布说明](docs/releases/0.3.1/发布说明.md)。自动更新与卸载清理规则见 [0.3.0 发布说明](docs/releases/0.3.0/发布说明.md)。已公开版本以 [GitHub Releases](https://github.com/Aice-Chen/BatteryManager/releases/latest) 为准。
 
 - 主窗口、托盘数字和快捷面板。
 - Windows 蓝牙电量、标准蓝牙电池服务。

@@ -13,7 +13,8 @@ while ($taskCursor.Length -gt $taskRoot.Length) {
     $taskCursor = [IO.Path]::GetDirectoryName($taskCursor)
 }
 if (-not (Test-Path -LiteralPath $taskExe -PathType Leaf)) { throw 'Publish the test binary first.' }
-if (@(Get-Process -Name BatteryManager.App -ErrorAction SilentlyContinue).Count -gt 0) { throw 'Exit the running app before this isolated scenario test.' }
+if (@(Get-Process -Name BatteryManager.App -ErrorAction SilentlyContinue | Where-Object Path -eq $taskExe).Count -gt 0) { throw 'The isolated test executable is already running.' }
+$taskOtherProcesses = @(Get-Process -Name BatteryManager.App -ErrorAction SilentlyContinue | Select-Object Id, StartTime, Path)
 $taskSuffix = 'ui-' + [Guid]::NewGuid().ToString('N')
 $taskDirectory = Join-Path $taskRoot ('.artifacts/app-tests/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $taskSuffix)
 $null = New-Item -ItemType Directory -Path $taskDirectory
@@ -177,6 +178,10 @@ try {
     $events=@(Get-Content -LiteralPath $taskLast.status.diagnosticLog | ForEach-Object { $_ | ConvertFrom-Json })
     $opens=@($events | Where-Object kind -eq 'hid-open'); $closes=@($events | Where-Object kind -eq 'hid-closed' | ForEach-Object { $_.data.channelId })
     Check-Ui (@($opens | Where-Object { $_.data.channelId -notin $closes }).Count -eq 0 -and @($events | Where-Object { $_.kind -eq 'session-stopped' -and $_.data.physicallyDrained }).Count -gt 0) 'All fictional HID channels completed release'
+    foreach ($other in $taskOtherProcesses) {
+        $current = Get-Process -Id $other.Id -ErrorAction Stop
+        Check-Ui ($current.Path -eq $other.Path -and $current.StartTime -eq $other.StartTime) 'An existing ordinary app remains the same process while isolated UI scenarios run'
+    }
     $taskResult.passed=$true
 } catch { $taskResult.error=$_.Exception.Message; throw }
 finally {

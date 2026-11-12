@@ -54,8 +54,19 @@ function Restart-Management {
 $taskSettings = File-Management 'settings.json'
 $taskManagement = File-Management 'management.json'
 try {
-    $taskProcess = Start-Process -FilePath $taskExe -ArgumentList @('--scenario', 'overview', '--test-pipe', $taskSuffix) -WorkingDirectory (Split-Path $taskExe) -WindowStyle Hidden -PassThru
+    $taskProcess = Start-Process -FilePath $taskExe -ArgumentList @('--scenario', 'overview', '--test-pipe', $taskSuffix, '--background') -WorkingDirectory (Split-Path $taskExe) -WindowStyle Hidden -PassThru
     $initial = Wait-Management
+    Check-Management (-not $initial.status.uiState.windowVisible -and $initial.status.tray.available) 'Background startup keeps the main window hidden with an available tray icon'
+    $helper = Start-Process -FilePath $taskExe -ArgumentList @('--scenario', 'overview', '--test-pipe', $taskSuffix, '--background') -WorkingDirectory (Split-Path $taskExe) -WindowStyle Hidden -PassThru
+    try { Check-Management ($helper.WaitForExit(10000) -and $helper.ExitCode -eq 0 -and -not (Wait-Management).status.uiState.windowVisible) 'A second background instance exits without showing the existing window' }
+    finally { $helper.Dispose() }
+    $helper = Start-Process -FilePath $taskExe -ArgumentList @('--scenario', 'overview', '--test-pipe', $taskSuffix) -WorkingDirectory (Split-Path $taskExe) -WindowStyle Hidden -PassThru
+    try {
+        if (-not $helper.WaitForExit(10000) -or $helper.ExitCode -ne 0) { throw 'The normal activation helper failed.' }
+        $visible = Wait-Management { param($s) $s.uiState.windowVisible }
+        Check-Management $visible.status.uiState.windowVisible 'A normal second instance shows the existing background window'
+    } finally { $helper.Dispose() }
+    Save-Management 'background-startup' $initial
     Check-Management ($initial.status.management.simulated -and -not $initial.status.scenario.usesRealHardware) 'Management scenario replaces hardware, HTTP, registry and settings boundaries'
     Check-Management ($initial.status.management.updatePhase -eq 'Idle' -and $initial.status.management.autoCheck) 'Scenario startup performs no automatic network check'
     $null = Command-Management 'preferences' 'open'
@@ -77,27 +88,31 @@ try {
     $removed = Wait-Management { param($s) $s.management.startupStatus -eq 'Disabled' }
     Check-Management (-not $removed.status.management.startupEnabled) 'A Windows-disabled registration can still be removed'
     $null = Ui-Management 'management-network' 'none'
-    $null = Ui-Management 'management-check'
+    $null = Ui-Management 'management-primary'
     $none = Wait-Management { param($s) $s.management.updatePhase -eq 'UpToDate' }
     Check-Management (-not $none.status.management.downloadVisible) 'No newer stable release offers no download'
     $null = Ui-Management 'management-network' 'error'
-    $null = Ui-Management 'management-check'
+    $null = Ui-Management 'management-primary'
     $failed = Wait-Management { param($s) $s.management.updatePhase -eq 'Failed' }
     Check-Management ($failed.status.management.checkEnabled -and $failed.status.management.error -match '模拟网络') 'A failed check remains visible and can be retried'
+    Check-Management ($failed.status.management.primaryActionEnabled -and $failed.status.management.primaryActionText -in @('重试', 'Retry')) 'The real update button presents an enabled retry after a failed check'
     $null = Ui-Management 'management-network' 'available'
-    $null = Ui-Management 'management-check'
+    $null = Ui-Management 'management-primary'
     $available = Wait-Management { param($s) $s.management.updatePhase -eq 'Available' }
     Check-Management ($available.status.management.downloadVisible -and -not $available.status.management.installVisible -and -not $available.status.management.error) 'A successful retry offers download and clears the old error'
-    $null = Ui-Management 'management-download-start'
+    Check-Management ($available.status.management.primaryActionEnabled -and $available.status.management.primaryActionText -in @('下载', 'Download')) 'The real update button presents download for the discovered version'
+    $null = Ui-Management 'management-primary'
     $running = Wait-Management { param($s) $s.management.updatePhase -eq 'Downloading' }
     Check-Management ($running.status.management.busy -and -not $running.status.management.checkEnabled) 'Downloading disables a conflicting check'
-    $null = Ui-Management 'management-cancel'
+    Check-Management ($running.status.management.primaryActionEnabled -and $running.status.management.primaryActionText -in @('取消', 'Cancel')) 'The real update button offers effective cancellation during download'
+    $null = Ui-Management 'management-primary'
     $canceled = Wait-Management { param($s) $s.management.updatePhase -eq 'Canceled' }
     Check-Management (-not $canceled.status.management.installVisible -and $canceled.status.management.downloadVisible) 'Canceled download cannot be installed and can be retried'
-    $null = Ui-Management 'management-download'
+    $null = Ui-Management 'management-primary'
     $downloaded = Wait-Management { param($s) $s.management.updatePhase -eq 'Downloaded' }
     Check-Management ($downloaded.status.management.installVisible -and -not $downloaded.status.management.downloadVisible) 'A completed verified download offers installation'
-    $null = Ui-Management 'management-install-open'
+    Check-Management ($downloaded.status.management.primaryActionEnabled -and $downloaded.status.management.primaryActionText -in @('安装', 'Install')) 'The real update button offers installation only after verified download'
+    $null = Ui-Management 'management-primary'
     $null = Wait-Management { param($s) $s.management.confirmationOpen }
     Check-Management (-not $taskProcess.HasExited) 'Installation confirmation keeps the app running'
     $null = Ui-Management 'management-install-cancel'

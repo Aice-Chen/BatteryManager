@@ -4,6 +4,13 @@ using System.Text.RegularExpressions;
 // solely so the same native image-path check can be exercised. It never starts the actual application.
 var directory = Path.GetFullPath(AppContext.BaseDirectory);
 if (!directory.Contains(Path.Combine(".artifacts", "tests", "installer-handoff") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return 2;
+// Model the shipped 0.3.0 argument parser for a preflight recovery: the old payload has not
+// been replaced yet and cannot accept the new version's background argument.
+if (args is ["--background"] && File.Exists(Path.Combine(directory, "fixture.legacy-arguments")))
+{
+    File.WriteAllText(Path.Combine(directory, "fixture.rejected-background"), "Unknown startup argument: --background");
+    return 2;
+}
 // The installed fixture is launched by the real installer restart paths, which pass --background as the
 // sign-in entry does. It records the observed installed version and its arguments, then exits; no desktop
 // app or device reader runs.

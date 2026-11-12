@@ -152,6 +152,7 @@ internal sealed class AppManagementController : IAsyncDisposable
         if (simulation is null && !localUpdateFixture) throw new InvalidOperationException("Management test actions require a fictional scenario or an explicit local update fixture.");
         switch (action)
         {
+            case "management-primary": window.Management.InvokePrimaryForTest(); break;
             case "management-check": await CheckAsync(); break;
             case "management-download": await DownloadAsync(); break;
             case "management-download-start": _ = DownloadAsync(); break;
