@@ -741,7 +741,8 @@ begin
       Saved := False;
       Log('Startup registration preserved: existing Run value is not recognized as Battery Manager.');
     end else
-      Saved := RegWriteStringValue(HKCU, RunKey, RunValueName, '"' + ExpandConstant('{app}\BatteryManager.App.exe') + '"');
+      // --background: the sign-in start stays in the tray. An entry written by 0.3.0 without it is rewritten here.
+      Saved := RegWriteStringValue(HKCU, RunKey, RunValueName, '"' + ExpandConstant('{app}\BatteryManager.App.exe') + '" --background');
   end
   else if RegQueryStringValue(HKCU, RunKey, RunValueName, Command) and IsBatteryManagerCommand(Command) then
     Saved := RegDeleteValue(HKCU, RunKey, RunValueName);
@@ -786,7 +787,8 @@ begin
     InstallCompleted := True;
   end;
   if (CurStep = ssDone) and InstallCompleted and AutoUpdate then begin
-    if not Exec(ExpandConstant('{app}\BatteryManager.App.exe'), '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, Code) then begin
+    // An automatic update was not started by the user: come back in the tray, as after sign-in.
+    if not Exec(ExpandConstant('{app}\BatteryManager.App.exe'), '--background', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, Code) then begin
       LaunchFailed := True;
       Log('Updated application could not be started: ' + IntToStr(Code));
       SuppressibleMsgBox('The update was installed, but Battery Manager could not be started. Start it from the Start menu.', mbError, MB_OK, IDOK);
@@ -825,7 +827,7 @@ begin
   if not AutoUpdate or not HandoffConfirmedExited or InstallationStarted then Exit;
   if (HandoffDirectory = '') or OtherRegisteredInstallationAt(HandoffDirectory) or not TreeWithoutReparse(HandoffDirectory) or
     not FileExists(AddBackslash(HandoffDirectory) + 'BatteryManager.App.exe') or CheckForMutexes('{#AppMutexName}') then Exit;
-  if Exec(AddBackslash(HandoffDirectory) + 'BatteryManager.App.exe', '', HandoffDirectory, SW_SHOWNORMAL, ewNoWait, Code) then
+  if Exec(AddBackslash(HandoffDirectory) + 'BatteryManager.App.exe', '--background', HandoffDirectory, SW_SHOWNORMAL, ewNoWait, Code) then
     Log('Update preflight refused; restarted the unchanged original application.')
   else Log('Update preflight refused; original restart failed: ' + IntToStr(Code));
 end;

@@ -75,7 +75,8 @@ $existing = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($plan.registryRoo
 if ($null -ne $existing) { $existing.Dispose(); throw 'The private test registry subtree already exists.' }
 $taskRunKey = $plan.registryRoot+'\Run'
 $taskApprovalKey = $plan.registryRoot+'\StartupApproved'
-$taskExpectedCommand = '"'+(Join-Path $plan.target 'BatteryManager.App.exe')+'"'
+$taskExpectedCommand = '"'+(Join-Path $plan.target 'BatteryManager.App.exe')+'" --background'
+$taskPreviousCommand = '"'+(Join-Path $plan.target 'BatteryManager.App.exe')+'"' # written by 0.3.0
 $taskResults = [Collections.Generic.List[object]]::new()
 $taskBaseArgs = @('/SP-','/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS','/NOCLOSEAPPLICATIONS','/NOFORCECLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS')
 
@@ -132,6 +133,8 @@ try {
     Test-StartupCase '05-mergetasks-explicit-on' @('/MERGETASKS=startup') $taskExpectedCommand
     Set-TestRun '' # Simulate the app disabling its own entry after installation.
     Test-StartupCase '06-app-disabled-stays-off' @() ''
+    Set-TestRun $taskPreviousCommand
+    Test-StartupCase '06b-previous-entry-upgraded-to-background' @() $taskExpectedCommand
     Set-TestRun $taskExpectedCommand
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($taskApprovalKey)
     try { $key.SetValue('BatteryManager',[byte[]]@(3,0,0,0,1,2,3,4,5,6,7,8),[Microsoft.Win32.RegistryValueKind]::Binary) } finally { $key.Dispose() }

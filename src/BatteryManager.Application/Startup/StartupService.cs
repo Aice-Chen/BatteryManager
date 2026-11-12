@@ -36,7 +36,8 @@ internal sealed class StartupService
         this.registry = registry;
         this.executablePath = StartupCommand.NormalizeExecutable(executablePath)
             ?? throw new ArgumentException("A fully qualified BatteryManager.App.exe path is required.", nameof(executablePath));
-        Command = '"' + this.executablePath + '"';
+        // The sign-in entry starts the app in the tray; a manual start opens the main window.
+        Command = '"' + this.executablePath + "\" " + StartupCommand.BackgroundArgument;
     }
 
     public StartupState Read()
@@ -122,6 +123,9 @@ internal sealed class StartupService
 
 internal static class StartupCommand
 {
+    /// <summary>Passed by the sign-in entry and by the restart after an automatic update: the app stays in the tray.</summary>
+    public const string BackgroundArgument = "--background";
+
     public static bool TryParse(string? command, out string? executable, out bool legacyArguments, out bool quoted)
     {
         executable = null; legacyArguments = false; quoted = false;
@@ -135,8 +139,10 @@ internal static class StartupCommand
             path = text[1..end];
             if (end + 1 < text.Length && !char.IsWhiteSpace(text[end + 1])) return false;
             var tail = text[(end + 1)..].Trim();
-            if (tail.Length != 0 && tail != "--startup") return false;
-            legacyArguments = tail.Length != 0;
+            // No argument is the entry written by 0.3.0, which opened the main window at sign-in. It still counts as
+            // this app's own entry; the next explicit enable or installer upgrade writes the background form.
+            if (tail.Length != 0 && tail != "--startup" && tail != BackgroundArgument) return false;
+            legacyArguments = tail == "--startup";
             quoted = true;
         }
         else

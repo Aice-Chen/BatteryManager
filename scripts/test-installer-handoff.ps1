@@ -164,7 +164,7 @@ try {
         Complete-HandoffInstaller $installer 'late-lock-restores-original' $false
         $timer=[Diagnostics.Stopwatch]::StartNew()
         while(-not (Test-Path -LiteralPath (Join-Path $taskTarget 'fixture.launches')) -and $timer.Elapsed.TotalSeconds -lt 10){Start-Sleep -Milliseconds 25}
-        if((Get-Content -LiteralPath (Join-Path $taskTarget 'fixture.launches') -Raw) -cne ("original"+[Environment]::NewLine) -or
+        if((Get-Content -LiteralPath (Join-Path $taskTarget 'fixture.launches') -Raw) -cne ("original --background"+[Environment]::NewLine) -or
             (Get-FileHash -LiteralPath (Join-Path $taskTarget 'BatteryManager.App.exe')).Hash -cne $taskOriginalHash){throw 'Late refusal did not restore exactly one unchanged original.'}
     } finally {$lock.Dispose();Close-ReadyHandshake $handshake;$handshake=$null}
     Remove-Item -LiteralPath (Join-Path $taskTarget 'fixture.launches')
@@ -196,7 +196,7 @@ try {
     Close-ReadyHandshake $handshake; $handshake=$null
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while (-not (Test-Path -LiteralPath (Join-Path $taskTarget 'fixture.launches')) -and $timer.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Milliseconds 25 }
-    if ((Get-Content -LiteralPath (Join-Path $taskTarget 'fixture.launches') -Raw) -cne ("upgraded"+[Environment]::NewLine)) { throw 'Auto-update did not start exactly one updated fixture.' }
+    if ((Get-Content -LiteralPath (Join-Path $taskTarget 'fixture.launches') -Raw) -cne ("upgraded --background"+[Environment]::NewLine)) { throw 'Auto-update did not start exactly one updated fixture in the background.' }
     Write-PortableText (Join-Path $taskTarget 'user-data.txt') 'preserved'
     $uninstaller=(Get-ChildItem -LiteralPath $taskTarget -Filter 'unins*.exe').FullName
     $uninstall=Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG="'+(Join-Path $taskEvidence 'uninstall.log')+'"')) -WindowStyle Hidden -PassThru

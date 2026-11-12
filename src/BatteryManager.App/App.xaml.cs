@@ -1,6 +1,7 @@
 using BatteryManager.Core;
 using BatteryManager.WindowsNative;
 using BatteryManager.Application.Installation;
+using BatteryManager.Application.Startup;
 using BatteryManager.Application.Updates;
 using Microsoft.UI.Xaml;
 
@@ -74,6 +75,9 @@ public partial class App : Microsoft.UI.Xaml.Application
             Exit();
             return;
         }
+        // The sign-in entry and the restart after an automatic update start the app in the tray.
+        var background = arguments.Contains(StartupCommand.BackgroundArgument, StringComparer.Ordinal);
+        arguments = arguments.Where(argument => argument != StartupCommand.BackgroundArgument).ToArray();
         string? testPipe;
         string? scenarioName;
         try
@@ -94,7 +98,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         _instance = new SingleInstance(scenarioScope);
         if (!_instance.IsPrimary)
         {
-            await SingleInstance.ActivateExistingAsync(scenarioScope);
+            // A background start that finds the app running leaves it as it is.
+            if (!background) await SingleInstance.ActivateExistingAsync(scenarioScope);
             _instance.Dispose();
             Exit();
             return;
@@ -188,7 +193,12 @@ public partial class App : Microsoft.UI.Xaml.Application
         _tray.ThemeChanged = _themes.QueueRefresh;
         ApplyThemes();
         RenderPresentation(_session.Snapshot);
-        _window.Activate();
+        if (background)
+        {
+            _window.HideToTray();
+            _ = ShowIfTrayMissingAsync();
+        }
+        else _window.Activate();
         _management.Start();
         _ = ObserveAsync(_session, _updates.Token);
         if (_scenarios is null)
@@ -252,6 +262,14 @@ public partial class App : Microsoft.UI.Xaml.Application
     {
         try { await _session!.ResumeAsync(); }
         catch (Exception error) { RecordCrash(error, "Resume refresh failed"); }
+    }
+
+    // At sign-in the taskbar may not accept icons yet; the icon registers again on its next update or when the
+    // taskbar is recreated. If it is still missing, open the window so the app is not running out of reach.
+    private async Task ShowIfTrayMissingAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(15));
+        if (!_quitting && _tray is { IsAvailable: false }) _window?.ShowWindow();
     }
 
     // The tray menu's "托盘设置" and the settings entry open the settings page at the tray priority.
