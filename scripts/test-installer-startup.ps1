@@ -42,6 +42,7 @@ if (-not $PreparedDirectory) {
     $output = Join-Path $directory 'compiled'
     $null = New-Item -ItemType Directory -Path $directory,$payload,$output
     Write-PortableText (Join-Path $payload 'BatteryManager.App.exe') 'Inert installer startup fixture; never execute.'
+    Write-PortableText (Join-Path $payload 'SHA256SUMS.txt') ((Get-FileHash -LiteralPath (Join-Path $payload 'BatteryManager.App.exe')).Hash.ToLowerInvariant()+'  BatteryManager.App.exe'+"`n")
     $arguments = @('/Q','/DStartupTaskTest=1',('/DIsolationTestId='+$id),('/DIsolationRoot='+$directory),('/DPayloadDirectory='+$payload),('/DOutputDirectory='+$output),'/DAppVersion=0.0.1','/DNumericVersion=0.0.1.0',$taskScript)
     & $taskCompiler @arguments 2>&1 | Tee-Object -FilePath (Join-Path $output 'compile.log') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Startup test installer did not compile.' }
@@ -118,8 +119,15 @@ $failure = $null
 try {
     Test-StartupCase '01-initial-default-off' @() ''
     Test-StartupCase '02-tasks-explicit-on' @('/TASKS=startup') $taskExpectedCommand
-    Set-TestRun ('"'+(Join-Path $taskEvidence 'old portable/BatteryManager.App.exe')+'" --startup')
-    Test-StartupCase '03-registered-silent-upgrade' @() $taskExpectedCommand
+    $differentCopy = '"'+(Join-Path $taskEvidence 'other install/BatteryManager.App.exe')+'" --startup'
+    Set-TestRun $differentCopy
+    Test-StartupCase '03-other-copy-silent-upgrade-preserved' @() $differentCopy
+    Test-StartupCase '03b-other-copy-explicit-on-preserved' @('/TASKS=startup') $differentCopy
+    $registration = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($plan.registryRoot+'\Uninstall')
+    try { $registration.SetValue('InstallLocation',(Join-Path $taskEvidence 'other install')) } finally { $registration.Dispose() }
+    Test-StartupCase '03c-registered-directory-migration' @() $taskExpectedCommand
+    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($plan.registryRoot+'\Uninstall',$false)
+    Set-TestRun $taskExpectedCommand
     Test-StartupCase '04-tasks-explicit-off' @('/TASKS=!startup') ''
     Test-StartupCase '05-mergetasks-explicit-on' @('/MERGETASKS=startup') $taskExpectedCommand
     Set-TestRun '' # Simulate the app disabling its own entry after installation.

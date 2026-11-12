@@ -7,5 +7,9 @@
     <Description>Isolated installer handoff fixture. No device access, settings, or UI.</Description>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <UseAppHost>true</UseAppHost>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
 </Project>
