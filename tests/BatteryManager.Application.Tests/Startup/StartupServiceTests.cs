@@ -12,7 +12,7 @@ public sealed class StartupServiceTests
     [InlineData(@"D:\应用软件\Battery Manager\BatteryManager.App.exe")]
     [InlineData(@"C:\BatteryManager\BatteryManager.App.exe")]
     [InlineData(@"\\server\apps\BatteryManager\BatteryManager.App.exe")]
-    public void ExplicitEnableWritesOneQuotedAbsoluteCommandWithoutLegacyArguments(string path)
+    public void ExplicitEnableWritesOneQuotedAbsoluteCommandThatStartsInTheBackground(string path)
     {
         var registry = new FakeRegistry();
         var service = new StartupService(registry, path);
@@ -23,7 +23,7 @@ public sealed class StartupServiceTests
         Assert.True(result.Success);
         Assert.True(result.State.IsEnabled);
         Assert.Equal(StartupStatus.Enabled, result.State.Status);
-        Assert.Equal('"' + path + '"', Assert.Single(registry.Writes));
+        Assert.Equal('"' + path + "\" --background", Assert.Single(registry.Writes));
         Assert.DoesNotContain("--startup", registry.Writes[0]!);
         Assert.True(service.SetEnabled(true, result.State).Success);
         Assert.Single(registry.Writes);
@@ -72,6 +72,39 @@ public sealed class StartupServiceTests
     }
 
     [Fact]
+    public void EntryWithoutArgumentsFromTheCurrentExecutableStaysEnabledUntilRewritten()
+    {
+        // 0.3.0 wrote the quoted path alone. It is this app's own entry, so it is shown as on and left as it is;
+        // an explicit enable rewrites it to the background form.
+        var original = '"' + Current + '"';
+        var registry = new FakeRegistry(original);
+        var service = new StartupService(registry, Current);
+        var state = service.Read();
+        Assert.Equal(StartupStatus.Enabled, state.Status);
+        Assert.True(state.IsEnabled);
+        Assert.False(state.HasLegacyArguments);
+        Assert.Null(state.Message);
+        Assert.Empty(registry.Writes);
+        Assert.Equal(original, registry.State.Command);
+        var saved = service.SetEnabled(true, state);
+        Assert.True(saved.Success);
+        Assert.Equal(service.Command, Assert.Single(registry.Writes));
+        Assert.Equal(StartupStatus.Enabled, saved.State.Status);
+    }
+
+    [Fact]
+    public void BackgroundCommandOnTheCurrentExecutableIsEnabled()
+    {
+        var registry = new FakeRegistry('"' + Current + "\" --background");
+        var service = new StartupService(registry, Current);
+        var state = service.Read();
+        Assert.Equal(StartupStatus.Enabled, state.Status);
+        Assert.False(state.HasLegacyArguments);
+        Assert.True(service.SetEnabled(true, state).Success);
+        Assert.Empty(registry.Writes);
+    }
+
+    [Fact]
     public void UnquotedKnownPathIsReportedForRepairAndOnlyExplicitEnableAddsQuotes()
     {
         var registry = new FakeRegistry(Current);
@@ -89,6 +122,9 @@ public sealed class StartupServiceTests
     [InlineData("\"C:\\app\\BatteryManager.App.exe\" --unknown")]
     [InlineData("\"C:\\app\\BatteryManager.App.exe\" --startup --unknown")]
     [InlineData("\"C:\\app\\BatteryManager.App.exe\"--startup")]
+    [InlineData("\"C:\\app\\BatteryManager.App.exe\" --background --unknown")]
+    [InlineData("\"C:\\app\\BatteryManager.App.exe\"--background")]
+    [InlineData("\"C:\\app\\BatteryManager.App.exe\" --startup --background")]
     [InlineData("C:\\other.exe --argument\\BatteryManager.App.exe")]
     [InlineData("\"%LOCALAPPDATA%\\BatteryManager.App.exe\"")]
     public void UnknownCommandsCannotBeOverwrittenOrDeleted(string command)
