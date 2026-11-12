@@ -121,6 +121,7 @@ try {
         $panel=Get-UiStatus
         Check-Ui ($panel.status.session.generation -eq $before.status.session.generation -and $panel.status.scenario.openedHidChannels -eq $before.status.scenario.openedHidChannels) "Panel open $index uses cached state without I/O"
         Check-Ui ($panel.status.panel.rowCount -eq 3 -and $panel.status.panel.cards.Count -eq 3) "Panel open $index renders all devices"
+        Check-Ui ($panel.status.panel.toolWindow -eq $true) "Panel open $index is a tool window, so taskbar tools do not count it as an open app window"
         Check-Ui ($panel.status.panel.focusState -eq 'Pointer' -and $panel.status.panel.focusedDeviceId -eq $panel.status.panel.cards[0].id) "Mouse panel open $index focuses the first displayed row without keyboard focus styling"
         $taskMetrics += $panel.status.panel
         $null=Invoke-UiCommand 'panel-close'
