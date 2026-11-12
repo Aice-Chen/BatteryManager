@@ -136,7 +136,8 @@ internal sealed class AppManagementController : IAsyncDisposable
         {
             if (stopping) return;
             window.Management.Apply(updates.Snapshot, startupState, simulation is not null, actionError);
-            window.SetUpdateAvailable(updates.Snapshot.Available?.Version);
+            // With automatic updates on, a new version installs by itself; the device page shows no notice.
+            window.SetUpdateAvailable(updates.Snapshot.AutoCheckEnabled ? null : updates.Snapshot.Available?.Version);
         });
     }
     private void Render() { if (!stopping) window.Management.Apply(updates.Snapshot, startupState, simulation is not null, actionError); }

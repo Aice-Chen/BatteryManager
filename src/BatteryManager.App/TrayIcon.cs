@@ -77,7 +77,7 @@ internal sealed class TrayIcon : IDisposable
         var tip = selected is not null
             ? $"{(_applicationName.Contains("演示数据", StringComparison.Ordinal) ? "演示数据 · " : "")}{selected.Name} {percent}%"
             : _applicationName + "\n" + (snapshot.IsSuspended ? UiText.Pick("系统睡眠 · 读取已暂停", "System sleep · Reading paused")
-                : snapshot.IsRefreshing ? UiText.Pick("正在读取设备信息", "Reading device information") : UiText.Pick("暂无在线设备的可用电量", "No battery reading from an online device"));
+                : snapshot.IsRefreshing ? UiText.Pick("正在读取…", "Reading…") : UiText.Pick("暂无可用电量", "No battery reading"));
         if (tip.Length > 127) tip = tip[..127];
         // The taskbar's scale can change while the app runs; redraw at its new icon size.
         var size = TaskbarIconSize();

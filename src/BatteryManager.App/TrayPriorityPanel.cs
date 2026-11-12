@@ -71,7 +71,7 @@ internal sealed class TrayPriorityPanel : UserControl
     private readonly FontIcon _headerIcon = new() { Glyph = "", FontSize = 20, Margin = new Thickness(2, 0, 20, 0), VerticalAlignment = VerticalAlignment.Center };
     // Tight line bounds: the right-hand value sat about 2 px below the title block on its left.
     private readonly TextBlock _current = new() { FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 260, TextLineBounds = TextLineBounds.Tight };
-    private readonly TextBlock _emptyNote = new() { Text = UiText.Pick("还没有设备，托盘自动选择", "No devices yet. The tray chooses automatically."), FontSize = 13, Margin = new Thickness(58, 10, 16, 12) };
+    private readonly TextBlock _emptyNote = new() { Text = UiText.Pick("暂无设备", "No devices yet"), FontSize = 13, Margin = new Thickness(58, 10, 16, 12) };
     private readonly TextBlock _othersEmpty = new() { Text = UiText.Pick("没有其他设备", "No other devices"), FontSize = 13, Margin = new Thickness(58, 10, 16, 12) };
     private readonly TextBlock _resetTitle = new() { FontSize = 14 };
     private readonly TextBlock _resetHint = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap };
@@ -123,7 +123,6 @@ internal sealed class TrayPriorityPanel : UserControl
         header.Children.Add(_headerIcon);
         var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
         labels.Children.Add(Ink(new TextBlock { Text = UiText.Get("TrayIcon"), FontSize = 14, LineHeight = 20 }));
-        labels.Children.Add(Muted(new TextBlock { Text = UiText.Pick("托盘数字显示优先顺序里第一台可用的设备", "The tray number shows the first available device in the order"), FontSize = 12, LineHeight = 16, TextWrapping = TextWrapping.Wrap }));
         Grid.SetColumn(labels, 1); header.Children.Add(labels);
         Grid.SetColumn(_current, 2); header.Children.Add(Muted(_current));
         stack.Children.Add(header);
@@ -169,8 +168,7 @@ internal sealed class TrayPriorityPanel : UserControl
         confirmBody.Children.Add(_confirmText);
         confirmBody.Children.Add(_confirmReset);
         _confirm.Content = confirmBody;
-        _confirmText.Text = UiText.Pick("将备份原配置，并重置托盘优先级、主窗口颜色及所有设备名称和类型。",
-            "The original file is backed up, then tray priority, main-window colour and all device names and types are reset.");
+        _confirmText.Text = UiText.Pick("先备份，再把所有设置恢复为默认。", "The file is backed up, then all settings return to their defaults.");
         _confirmReset.Content = UiText.Pick("重置", "Reset");
         _confirmReset.Click += (_, _) => ConfirmReset();
         _confirm.Closed += (_, _) => _resetConfirmationOpen = false;
@@ -710,15 +708,16 @@ internal sealed class TrayPriorityPanel : UserControl
         if (_loadWarning is null)
         {
             _resetTitle.Text = UiText.Pick("全部自动", "All automatic");
-            _resetHint.Text = UiText.Pick("清除优先顺序，托盘自动选择", "Clear the order; the tray chooses automatically");
-            _reset.Content = UiText.Pick("清除", "Clear");
+            _resetHint.Text = "";
+            _reset.Content = UiText.Pick("清除顺序", "Clear order");
         }
         else
         {
             _resetTitle.Text = UiText.Pick("设置无法读取", "Settings could not be read");
-            _resetHint.Text = _loadWarning + " " + UiText.Pick("重置前会备份原配置。", "The original file is backed up before the reset.");
+            _resetHint.Text = _loadWarning;
             _reset.Content = UiText.Pick("重置全部设置", "Reset all settings");
         }
+        _resetHint.Visibility = _resetHint.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         var error = _saveError;
         _message.Text = error ?? "";
         _message.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
