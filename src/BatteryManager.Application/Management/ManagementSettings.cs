@@ -1,5 +1,6 @@
 namespace BatteryManager.Application.Management;
 
+// Keep the persisted field name to preserve existing choices; true enables the full automatic update flow.
 internal sealed record ManagementSettings(bool AutoCheckUpdates = true,
     DateTimeOffset? LastCheckUtc = null, DateTimeOffset? LastSuccessfulCheckUtc = null);
 

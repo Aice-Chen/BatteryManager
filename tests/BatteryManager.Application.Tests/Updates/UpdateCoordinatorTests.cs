@@ -18,7 +18,7 @@ public sealed class UpdateCoordinatorTests
         await using var coordinator = Create(client, store, clock);
         Assert.True(coordinator.ShouldCheckAutomatically());
         Assert.Equal(0, client.CheckCount);
-        Assert.True((await coordinator.CheckAsync(automatic: true)).Success);
+        Assert.True((await coordinator.CheckAsync()).Success);
         Assert.Equal(UpdatePhase.Available, coordinator.Snapshot.Phase);
         Assert.Equal("0.2.0", coordinator.Snapshot.Available!.Version);
         Assert.Equal(clock.GetUtcNow(), coordinator.Snapshot.LastCheckUtc);
@@ -85,7 +85,7 @@ public sealed class UpdateCoordinatorTests
     }
 
     [Fact]
-    public async Task Only_explicit_download_can_produce_a_verified_file_result()
+    public async Task Manual_check_requires_explicit_download_to_produce_a_verified_file_result()
     {
         var client = new FakeClient
         {
@@ -101,6 +101,206 @@ public sealed class UpdateCoordinatorTests
         Assert.Equal("verified-package", coordinator.Snapshot.DownloadedFile);
         Assert.Equal(100, coordinator.Snapshot.DownloadedBytes);
         Assert.Equal(1, client.DownloadCount);
+    }
+
+    [Fact]
+    public async Task Automatic_check_downloads_installer_in_the_same_reserved_operation()
+    {
+        var entered = Signal(); var release = Signal();
+        var client = new FakeClient
+        {
+            Check = _ => Task.FromResult<AvailableUpdate?>(Offer()),
+            Download = async (_, _, _) => { entered.TrySetResult(); await release.Task; return "verified-package"; }
+        };
+        await using var coordinator = Create(client);
+        var cycle = coordinator.CheckAsync(automatic: true);
+        try
+        {
+            await entered.Task.WaitAsync(Deadline);
+            Assert.Equal(UpdateOperationOutcome.Busy, (await coordinator.CheckAsync()).Outcome);
+            Assert.Equal(UpdateOperationOutcome.Busy, (await coordinator.DownloadAsync(UpdatePackageKind.Installer)).Outcome);
+        }
+        finally { release.TrySetResult(); }
+        Assert.True((await cycle.WaitAsync(Deadline)).Success);
+        Assert.Equal(UpdatePhase.Downloaded, coordinator.Snapshot.Phase);
+        Assert.Equal("verified-package", coordinator.Snapshot.DownloadedFile);
+        Assert.Equal(1, client.CheckCount);
+        Assert.Equal(1, client.DownloadCount);
+        Assert.False(coordinator.ShouldCheckAutomatically());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Disabling_during_automatic_work_rejects_late_success_and_keeps_false_after_restart(bool duringDownload)
+    {
+        var entered = Signal(); var release = Signal();
+        var store = new MemoryStore();
+        var client = new FakeClient
+        {
+            Check = async _ => { if (!duringDownload) { entered.TrySetResult(); await release.Task; } return Offer(); },
+            Download = async (_, _, _) => { entered.TrySetResult(); await release.Task; return "late-file"; }
+        };
+        await using (var coordinator = Create(client, store))
+        {
+            var cycle = coordinator.CheckAsync(automatic: true);
+            try
+            {
+                await entered.Task.WaitAsync(Deadline);
+                Assert.True((await coordinator.SetAutomaticChecksAsync(false)).Success);
+                Assert.False(cycle.IsCompleted);
+            }
+            finally { release.TrySetResult(); }
+            Assert.Equal(UpdateOperationOutcome.Canceled, (await cycle.WaitAsync(Deadline)).Outcome);
+            Assert.Null(coordinator.Snapshot.DownloadedFile);
+            Assert.Equal(duringDownload ? 1 : 0, client.DownloadCount);
+        }
+        await using var restarted = Create(client, store);
+        Assert.False(restarted.ShouldCheckAutomatically());
+        Assert.Equal(UpdateOperationOutcome.Skipped, (await restarted.CheckAsync(automatic: true)).Outcome);
+    }
+
+    [Fact]
+    public async Task Automatic_download_error_is_visible_and_throttled_but_manual_retry_remains_possible()
+    {
+        var client = new FakeClient
+        {
+            Check = _ => Task.FromResult<AvailableUpdate?>(Offer()),
+            Download = (_, _, _) => throw new IOException("checksum failure")
+        };
+        await using var coordinator = Create(client);
+        Assert.Equal(UpdateOperationOutcome.Failed, (await coordinator.CheckAsync(automatic: true)).Outcome);
+        Assert.Equal("checksum failure", coordinator.Snapshot.Error);
+        Assert.Equal(UpdatePhase.Failed, coordinator.Snapshot.Phase);
+        Assert.Null(coordinator.Snapshot.DownloadedFile);
+        Assert.False(coordinator.ShouldCheckAutomatically());
+        Assert.True((await coordinator.CheckAsync()).Success);
+    }
+
+    [Fact]
+    public async Task Disabling_does_not_cancel_an_explicit_manual_download()
+    {
+        var entered = Signal(); var release = Signal();
+        var client = new FakeClient
+        {
+            Check = _ => Task.FromResult<AvailableUpdate?>(Offer()),
+            Download = async (_, _, token) => { entered.TrySetResult(); await release.Task; token.ThrowIfCancellationRequested(); return "manual-file"; }
+        };
+        await using var coordinator = Create(client);
+        await coordinator.CheckAsync();
+        var download = coordinator.DownloadAsync(UpdatePackageKind.Installer);
+        try { await entered.Task.WaitAsync(Deadline); await coordinator.SetAutomaticChecksAsync(false); }
+        finally { release.TrySetResult(); }
+        Assert.True((await download.WaitAsync(Deadline)).Success);
+    }
+
+    [Fact]
+    public async Task Installation_preflight_reserves_requests_and_shutdown_does_not_await_its_own_handoff()
+    {
+        var client = new FakeClient { Check = _ => Task.FromResult<AvailableUpdate?>(Offer()), Download = (_, _, _) => Task.FromResult("installer") };
+        await using var coordinator = Create(client);
+        await coordinator.CheckAsync(automatic: true);
+        await using var installation = coordinator.TryPrepareInstallation(automatic: true);
+        Assert.NotNull(installation);
+        Assert.Equal("installer", installation.File);
+        Assert.Equal("0.2.0", installation.Package.Version);
+        Assert.Equal(UpdateOperationOutcome.Busy, (await coordinator.CheckAsync()).Outcome);
+        Assert.Equal(UpdateOperationOutcome.Busy, (await coordinator.DownloadAsync(UpdatePackageKind.Installer)).Outcome);
+        Assert.True(installation.TryCommit());
+        // This is the call graph used by App: install -> normal shutdown -> stop management.
+        // Stop may drain cancellation and HTTP, but cannot await installation's own completion.
+        await coordinator.CancelAndDrainAsync().WaitAsync(Deadline);
+        Assert.Equal(UpdatePhase.Stopped, coordinator.Snapshot.Phase);
+    }
+
+    [Theory]
+    [InlineData("disable")]
+    [InlineData("cancel")]
+    [InlineData("stop")]
+    public async Task Automatic_preflight_cannot_commit_after_disable_cancel_or_shutdown(string reason)
+    {
+        var client = new FakeClient { Check = _ => Task.FromResult<AvailableUpdate?>(Offer()), Download = (_, _, _) => Task.FromResult("installer") };
+        await using var coordinator = Create(client);
+        await coordinator.CheckAsync(automatic: true);
+        await using var installation = coordinator.TryPrepareInstallation(automatic: true);
+        Assert.NotNull(installation);
+        if (reason == "disable") await coordinator.SetAutomaticChecksAsync(false);
+        else if (reason == "cancel") await coordinator.CancelCurrentAsync();
+        else await coordinator.CancelAndDrainAsync().WaitAsync(Deadline);
+        Assert.True(installation.Token.IsCancellationRequested);
+        Assert.False(installation.TryCommit());
+    }
+
+    [Fact]
+    public async Task A_manual_download_is_not_silently_promoted_to_an_automatic_installation()
+    {
+        var client = new FakeClient { Check = _ => Task.FromResult<AvailableUpdate?>(Offer()), Download = (_, _, _) => Task.FromResult("installer") };
+        await using var coordinator = Create(client);
+        await coordinator.CheckAsync();
+        await coordinator.DownloadAsync(UpdatePackageKind.Installer);
+        Assert.Null(coordinator.TryPrepareInstallation(automatic: true));
+        await using var manual = coordinator.TryPrepareInstallation(automatic: false);
+        Assert.NotNull(manual);
+        await coordinator.SetAutomaticChecksAsync(false);
+        Assert.True(manual.TryCommit());
+    }
+
+    [Fact]
+    public async Task Failed_installation_preparation_releases_reservation_for_a_manual_retry()
+    {
+        var client = new FakeClient { Check = _ => Task.FromResult<AvailableUpdate?>(Offer()), Download = (_, _, _) => Task.FromResult("installer") };
+        await using var coordinator = Create(client);
+        await coordinator.CheckAsync(automatic: true);
+        var installation = coordinator.TryPrepareInstallation(automatic: true);
+        Assert.NotNull(installation);
+        await installation.DisposeAsync(); // Verification or Process.Start failed; app stays open.
+        Assert.Equal(UpdatePhase.Downloaded, coordinator.Snapshot.Phase);
+        Assert.False(coordinator.ShouldCheckAutomatically());
+        await using var retry = coordinator.TryPrepareInstallation(automatic: false);
+        Assert.NotNull(retry);
+        Assert.True(retry.TryCommit());
+    }
+
+    [Fact]
+    public async Task Automatic_download_waits_for_persisted_attempt_and_stops_on_store_failure()
+    {
+        var entered = Signal(); var release = Signal();
+        var store = new MemoryStore { SaveError = "disk unavailable", BeforeAttempt = async () => { entered.TrySetResult(); await release.Task; } };
+        var client = new FakeClient { Check = _ => Task.FromResult<AvailableUpdate?>(Offer()) };
+        await using var coordinator = Create(client, store);
+        var cycle = coordinator.CheckAsync(automatic: true);
+        try
+        {
+            await entered.Task.WaitAsync(Deadline);
+            Assert.False(cycle.IsCompleted);
+            Assert.Equal(0, client.DownloadCount);
+        }
+        finally { release.TrySetResult(); }
+        Assert.Equal(UpdateOperationOutcome.Failed, (await cycle.WaitAsync(Deadline)).Outcome);
+        Assert.Equal(0, client.DownloadCount);
+        Assert.Equal("disk unavailable", coordinator.Snapshot.Error);
+        Assert.Null(coordinator.TryPrepareInstallation(automatic: true));
+    }
+
+    [Fact]
+    public async Task Stop_during_automatic_download_drains_client_and_never_produces_an_installation()
+    {
+        var entered = Signal(); var release = Signal();
+        var client = new FakeClient
+        {
+            Check = _ => Task.FromResult<AvailableUpdate?>(Offer()),
+            Download = async (_, _, _) => { entered.TrySetResult(); await release.Task; return "late-file"; }
+        };
+        await using var coordinator = Create(client);
+        var cycle = coordinator.CheckAsync(automatic: true);
+        await entered.Task.WaitAsync(Deadline);
+        var stopped = coordinator.CancelAndDrainAsync();
+        Assert.False(stopped.IsCompleted);
+        Assert.Null(coordinator.TryPrepareInstallation(automatic: true));
+        release.TrySetResult();
+        await stopped.WaitAsync(Deadline);
+        Assert.Equal(UpdateOperationOutcome.Canceled, (await cycle).Outcome);
+        Assert.Null(coordinator.Snapshot.DownloadedFile);
     }
 
     [Fact]

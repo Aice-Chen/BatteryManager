@@ -49,6 +49,7 @@ internal sealed class MainWindow : Window
     public ManagementPanel Management { get; } = new();
     public Action? ManagementOpened { get; set; }
     public bool CanManageApplication => _settingsVisible && !_quitting && !_preparingInstallation && AppWindow.IsVisible;
+    public bool CanUpdateAutomatically => !_quitting && !_preparingInstallation;
     private readonly InfoBar _updateNotice = new() { IsOpen = false, IsClosable = true, Margin = new Thickness(0, 0, 0, 8) };
     private string? _availableUpdateVersion;
     private string? _dismissedUpdateVersion;
@@ -239,7 +240,7 @@ internal sealed class MainWindow : Window
     }
     public void ShowSettings(bool show)
     {
-        if (_quitting || _preparingInstallation) return;
+        if (_quitting || (_preparingInstallation && !show)) return;
         if (!show) Management.HideConfirmation();
         if (show && !_settingsVisible)
         {
@@ -295,9 +296,10 @@ internal sealed class MainWindow : Window
         _preparingInstallation = preparing;
         if (_quitting) return;
         // Disabling the panel invalidates an unfinished drag without discarding its
-        // accepted save queue. The page and navigation stay frozen until preflight ends.
-        _settingsPage.IsEnabled = _deviceScroll.IsEnabled = !preparing;
-        _back.IsEnabled = _settings.IsEnabled = !preparing;
+        // accepted save queue. Management remains enabled so preflight can be canceled.
+        _deviceScroll.IsEnabled = !preparing;
+        _back.IsEnabled = !preparing;
+        _settings.IsEnabled = true; // The update cancel controls remain reachable during background preflight.
         TrayPriority.IsEnabled = !preparing && !_scenarioChanging && !_mergeBusy;
         _colorMode.IsEnabled = !preparing && _colorSave is not { IsCompleted: false };
         _undo.IsEnabled = !preparing && !_mergeBusy;

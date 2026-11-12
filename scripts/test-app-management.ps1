@@ -6,7 +6,8 @@ $taskRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd('
 . (Join-Path $PSScriptRoot 'portable-common.ps1')
 $taskExe = Resolve-PortableProjectPath $PreviewExe $taskRoot -ArtifactsOnly
 if ($taskExe -eq (Join-Path $taskRoot '.artifacts/preview/BatteryManager.App.exe')) { throw 'Use an isolated publish directory.' }
-if (@(Get-Process -Name BatteryManager.App -ErrorAction SilentlyContinue).Count) { throw 'Exit the existing app before this test.' }
+if (@(Get-Process -Name BatteryManager.App -ErrorAction SilentlyContinue | Where-Object Path -eq $taskExe).Count) { throw 'The isolated test executable is already running.' }
+$taskOtherProcesses = @(Get-Process -Name BatteryManager.App -ErrorAction SilentlyContinue | Select-Object Id, StartTime, Path)
 $taskSuffix = 'management-' + [Guid]::NewGuid().ToString('N')
 $taskDirectory = Join-Path $taskRoot ('.artifacts/app-tests/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $taskSuffix)
 $null = New-Item -ItemType Directory -Path $taskDirectory
@@ -38,6 +39,17 @@ function File-Management([string]$Name) {
     $path = Join-Path (Split-Path $taskExe) $Name
     if (Test-Path -LiteralPath $path) { return (Get-FileHash -LiteralPath $path).Hash }
     return 'missing'
+}
+function Restart-Management {
+    if ($null -ne $script:taskProcess) {
+        if (-not $script:taskProcess.HasExited) {
+            $null = Command-Management 'quit'
+            if (-not $script:taskProcess.WaitForExit(15000)) { throw 'The isolated scenario did not drain.' }
+        }
+        $script:taskProcess.Dispose()
+    }
+    $script:taskProcess = Start-Process -FilePath $taskExe -ArgumentList @('--scenario', 'overview', '--test-pipe', $taskSuffix) -WorkingDirectory (Split-Path $taskExe) -WindowStyle Hidden -PassThru
+    return Wait-Management
 }
 $taskSettings = File-Management 'settings.json'
 $taskManagement = File-Management 'management.json'
@@ -137,6 +149,65 @@ try {
     $events = @(Get-Content -LiteralPath $preflight.status.diagnosticLog | ForEach-Object { $_ | ConvertFrom-Json })
     Check-Management (@($events | Where-Object kind -eq 'installer-launch').Count -eq 0 -and @($events | Where-Object kind -eq 'session-stopped').Count -eq 1) 'Ordinary exit supersedes a pending installation and never launches an installer'
     Check-Management (@($events | Where-Object kind -eq 'priority-save-applied').Count -eq 1) 'A previously accepted settings write finishes before ordinary exit'
+
+    $null = Restart-Management
+    $null = Ui-Management 'management-network' 'error'
+    $null = Ui-Management 'management-auto-run'
+    $autoFailed = Wait-Management { param($s) $s.management.updatePhase -eq 'Failed' }
+    Check-Management ($autoFailed.status.view.page -eq 'devices' -and $autoFailed.status.management.error -match '模拟网络' -and -not $taskProcess.HasExited) 'Automatic checking runs outside settings and leaves the app running on network failure'
+    $null = Ui-Management 'management-network' 'available'
+    $null = Ui-Management 'management-auto-run'
+    Check-Management ((Wait-Management).status.management.updatePhase -eq 'Failed') 'An automatic failure is throttled instead of repeatedly retrying'
+    Save-Management 'automatic-network-failure' $autoFailed
+
+    $null = Restart-Management
+    $null = Ui-Management 'management-auto' 'off'
+    $null = Ui-Management 'management-auto-run'
+    Check-Management ((Wait-Management).status.management.updatePhase -eq 'Idle') 'Disabled automatic updates perform no check or installation'
+    $null = Command-Management 'preferences' 'open'
+    $null = Ui-Management 'management-check'
+    $manualOnly = Wait-Management { param($s) $s.management.updatePhase -eq 'Available' }
+    Check-Management ($manualOnly.status.management.downloadVisible -and -not $manualOnly.status.management.busy) 'Manual checking remains an explicit download flow when automatic updates are disabled'
+
+    $null = Restart-Management
+    $null = Ui-Management 'management-auto-run-start'
+    $null = Wait-Management { param($s) $s.management.updatePhase -eq 'Downloading' }
+    $null = Ui-Management 'management-auto-toggle' 'off'
+    $autoCanceled = Wait-Management { param($s) $s.management.updatePhase -eq 'Canceled' }
+    Check-Management (-not $taskProcess.HasExited -and -not $autoCanceled.status.management.autoCheck -and -not $autoCanceled.status.management.installVisible) 'Turning off automatic updates cancels an active download without installation'
+    Save-Management 'automatic-download-canceled' $autoCanceled
+
+    $null = Restart-Management
+    $null = Command-Management 'preferences' 'open'
+    $null = Ui-Management 'priority-save-test' 'hold'
+    $choice = (Wait-Management).status.preferences.dialog.available[0].deviceId
+    $null = Command-Management 'preferences' 'add' -DeviceId $choice
+    $null = Wait-Management { param($s) $s.preferences.dialog.isSaving }
+    $null = Ui-Management 'management-auto-run-start'
+    $autoPreparing = Wait-Management { param($s) $s.uiState.preparingInstallation }
+    Check-Management ($autoPreparing.status.management.automaticControlEnabled -and $autoPreparing.status.management.cancelControlEnabled -and -not $autoPreparing.status.uiState.preferencesEnabled) 'Automatic preflight freezes device edits while keeping effective update cancellation controls enabled'
+    $null = Ui-Management 'management-auto-toggle' 'off'
+    $null = Wait-Management { param($s) -not $s.management.autoCheck }
+    $null = Ui-Management 'priority-save-test' 'release'
+    $preflightCanceled = Wait-Management { param($s) -not $s.uiState.preparingInstallation -and $s.management.updatePhase -eq 'Canceled' }
+    Check-Management ($preflightCanceled.status.uiState.preferencesEnabled -and -not $taskProcess.HasExited) 'Disabling automatic updates during accepted-save drain prevents commit and restores editing'
+    Save-Management 'automatic-preflight-canceled' $preflightCanceled
+
+    $automatic = Restart-Management
+    Check-Management ($automatic.status.view.page -eq 'devices') 'Automatic success starts from the normal device page'
+    $null = Ui-Management 'window-hide'
+    $null = Ui-Management 'management-auto-loop-start'
+    Check-Management ($taskProcess.WaitForExit(15000) -and $taskProcess.ExitCode -eq 0) 'The actual periodic automatic loop downloads and completes simulated installation while hidden without self-await deadlock'
+    $events = @(Get-Content -LiteralPath $automatic.status.diagnosticLog | ForEach-Object { $_ | ConvertFrom-Json })
+    $kinds = @($events | ForEach-Object kind)
+    $stopped = [Array]::IndexOf($kinds, 'session-stopped'); $launch = [Array]::IndexOf($kinds, 'installer-launch')
+    Check-Management ($stopped -ge 0 -and $launch -gt $stopped -and $events[$launch].data.simulated) 'Automatic simulated installation follows normal physical session drain'
+    Save-Management 'automatic-hidden-success-events' $events
+    Check-Management ((File-Management 'settings.json') -ceq $taskSettings -and (File-Management 'management.json') -ceq $taskManagement) 'Automatic scenarios also leave disk settings unchanged'
+    foreach ($other in $taskOtherProcesses) {
+        $current = Get-Process -Id $other.Id -ErrorAction Stop
+        Check-Management ($current.Path -eq $other.Path -and $current.StartTime -eq $other.StartTime) 'An existing ordinary app remains the same process while isolated scenarios run'
+    }
     $taskResult.passed = $true
 } catch {
     $taskResult.error = $_.Exception.Message

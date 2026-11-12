@@ -84,8 +84,7 @@ internal sealed class ReleaseUpdateClient : IReleaseUpdateClient, IDisposable
         return new(version, new($"https://github.com/{Repository}/releases/tag/{tag}"), packages.AsReadOnly());
     }
 
-    // This operation only downloads. Launching an installer is a separate, user-confirmed
-    // application operation after settings and hardware I/O have drained.
+    // This operation only downloads. The app owns the verified installer handoff and normal shutdown.
     public async Task<string> DownloadAsync(UpdatePackage package, string cacheDirectory,
         IProgress<long>? progress = null, CancellationToken cancellationToken = default)
     {

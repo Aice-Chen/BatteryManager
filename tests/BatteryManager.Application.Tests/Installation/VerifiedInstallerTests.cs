@@ -11,6 +11,46 @@ public sealed class VerifiedInstallerTests
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(5);
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Installer_arguments_require_automatic_opt_in_and_preserve_exact_wait_target(bool automatic)
+    {
+        var start = VerifiedInstaller.CreateStartInfo(@"C:\cache\BatteryManager-0.3.0-win-x64-setup.exe",
+            @"D:\My Apps\BatteryManager", 12345, automatic, waitToken: automatic ? new string('a', 32) : null);
+        Assert.Equal(@"C:\cache\BatteryManager-0.3.0-win-x64-setup.exe", start.FileName);
+        Assert.True(start.UseShellExecute);
+        Assert.Contains("/WAITPID=12345", start.ArgumentList);
+        Assert.Contains(@"/DIR=D:\My Apps\BatteryManager", start.ArgumentList);
+        Assert.Contains("/NOCLOSEAPPLICATIONS", start.ArgumentList);
+        Assert.Contains("/NORESTART", start.ArgumentList);
+        Assert.Equal(automatic, start.ArgumentList.Contains("/AUTOUPDATE=1"));
+        Assert.Equal(automatic, start.ArgumentList.Contains("/VERYSILENT"));
+        Assert.Equal(automatic, start.ArgumentList.Contains("/SUPPRESSMSGBOXES"));
+        Assert.Equal(automatic, start.ArgumentList.Contains("/SP-"));
+        Assert.Equal(automatic, start.ArgumentList.Contains("/WAITTOKEN=" + new string('a', 32)));
+    }
+
+    [Fact]
+    public void Silent_manual_fixture_does_not_opt_into_automatic_restart()
+    {
+        var start = VerifiedInstaller.CreateStartInfo(@"C:\cache\setup.exe", @"D:\Apps\BatteryManager", 23456,
+            automatic: false, fixtureLog: @"C:\test evidence\setup.log");
+        Assert.Contains("/VERYSILENT", start.ArgumentList);
+        Assert.Contains(@"/LOG=C:\test evidence\setup.log", start.ArgumentList);
+        Assert.DoesNotContain("/AUTOUPDATE=1", start.ArgumentList);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("abc")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    public void Automatic_launch_requires_the_exact_lowercase_handshake_token(string? token)
+    {
+        Assert.Throws<ArgumentException>(() => VerifiedInstaller.CreateStartInfo(@"C:\cache\setup.exe",
+            @"D:\Apps\BatteryManager", 23456, automatic: true, waitToken: token));
+    }
+
+    [Theory]
     [InlineData("same-length-replacement")]
     [InlineData("changed-length")]
     [InlineData("wrong-hash")]
